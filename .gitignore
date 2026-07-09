@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Per-race data drops: large and not something we want piling up in git history.
+# Keep the README and the empty example template tracked; ignore everything else under data/.
+/data/*
+!/data/README.md
+!/data/_example-race/
+!/data/_example-race/**
