@@ -23,6 +23,11 @@ from chip_timing_analysis.analysis.start_finish import (
 )
 from chip_timing_analysis.analysis.queue_lag import compute_lag, add_excess_lag, add_finish_rate
 from chip_timing_analysis.analysis.finish_density import finish_density, rolling_finish_rate, finish_gaps, STANDARD_WINDOW, BURST_WINDOW
+from chip_timing_analysis.analysis.mat_reliability import (
+    mat_summary as compute_mat_summary,
+    flag_weak_mats,
+    mat_reliability_verdict,
+)
 
 
 @dataclass
@@ -66,6 +71,14 @@ class RaceReport:
     density_rolling_burst: pd.DataFrame | None = None  # rolling_finish_rate(), BURST_WINDOW (15s) -- catches short clusters a 60s window smooths over
     finish_gap_sec: pd.Series | None = None  # finish_gaps() output
 
+    # Raw (r_*.log, RR-type) per-mat diagnostics: is any antenna reading
+    # weakly (low signal strength) or being missed almost entirely, which
+    # could point to a cabling/power problem. Detailed report only;
+    # de-emphasized to a one-liner unless mat_reliability_verdict flags a
+    # systemic_signal. mat_summary is None if no r_*.log was found.
+    mat_summary: pd.DataFrame | None = None  # compute_mat_summary() output, one row per mat_id
+    mat_reliability_verdict: dict | None = None  # mat_reliability_verdict() output
+
     # Free-text operational notes (e.g. "brief network outage, did not affect
     # results") -- known-good context a human supplies; not auto-detected.
     # `notes` must stay bib/name-free: it's shown verbatim in the detailed
@@ -83,20 +96,39 @@ class RaceReport:
     known_drops: list[int] = field(default_factory=list)
 
     def finish_miss_bibs(self) -> set:
-        """All bibs with no finish read: zero_reads + missed_finish_only."""
+        """All bibs with no finish read: zero_reads + missed_finish_only.
+        Includes confirmed drops (see genuine_finish_miss_bibs() for the
+        version that excludes them) -- this raw set is what the backup-
+        report reconciliation needs to work from."""
         return set(self.zero_reads["bib"]) | set(self.missed_finish_only["bib"])
 
+    def genuine_finish_miss_bibs(self) -> set:
+        """finish_miss_bibs() minus confirmed drops (known_drops). A
+        confirmed drop (started, did not finish) has no finish read by
+        definition -- there was never a finish to read -- so it isn't a
+        chip-reading failure and shouldn't count toward "chips not read at
+        finish" or the missed-read percentage. Use this, not
+        finish_miss_bibs(), for any headline miss count/percentage."""
+        return self.finish_miss_bibs() - set(self.known_drops)
+
     def pct_read_opportunities_missed(self) -> float:
-        """% of (participant x 2 opportunities: start + finish) that went unread.
-        no_chip_assigned/zero_reads count as both opportunities missed."""
+        """% of (participant x 2 opportunities: start + finish) that went
+        unread. no_chip_assigned/zero_reads count as both opportunities
+        missed. Confirmed drops' "missing" finish read is excluded -- see
+        genuine_finish_miss_bibs()."""
         total_opportunities = self.n_participants * 2
         if total_opportunities == 0:
             return 0.0
+        drop_bibs = set(self.known_drops)
+        n_zero_read_drops = len(drop_bibs & set(self.zero_reads["bib"]))
+        n_finish_only_drops = len(drop_bibs & set(self.missed_finish_only["bib"]))
         total_missed = (
             2 * len(self.no_chip_assigned)
             + 2 * len(self.zero_reads)
             + len(self.missed_start_only)
             + len(self.missed_finish_only)
+            - 2 * n_zero_read_drops
+            - n_finish_only_drops
         )
         return total_missed / total_opportunities * 100
 
@@ -161,6 +193,15 @@ def build_race_report(
     missed_start_only = classified[classified["bib"].isin(missed_start_bibs - zero_read_bibs)]
     missed_finish_only = classified[classified["bib"].isin(missed_finish_bibs - zero_read_bibs)]
 
+    # r_*.log (RR, every individual antenna ping) is separate from f_*.log
+    # (used above for start/finish classification) -- filtering collapses
+    # exactly the per-mat density/signal-strength signal this diagnostic
+    # needs. Optional: older/incomplete race folders may not have it.
+    raw_log = _find_one(str(race_dir / "r_*.log"))
+    raw_reads = parse_trident_raw(raw_log) if raw_log else None
+    mat_summ = compute_mat_summary(raw_reads) if raw_reads is not None else None
+    mat_verdict = mat_reliability_verdict(mat_summ, flag_weak_mats(mat_summ)) if mat_summ is not None else None
+
     backup_path = _find_one(str(race_dir / "backup-time-selected.csv")) or _find_one(str(race_dir / "time-machine-used.csv"))
     backup = parse_backup_time_selected(backup_path, race_date=race_date) if backup_path else None
 
@@ -197,6 +238,8 @@ def build_race_report(
         density_rolling=rolling_finish_rate(classified, window=STANDARD_WINDOW),
         density_rolling_burst=rolling_finish_rate(classified, window=BURST_WINDOW),
         finish_gap_sec=finish_gaps(classified),
+        mat_summary=mat_summ,
+        mat_reliability_verdict=mat_verdict,
         notes=notes or [],
         detail_notes=detail_notes or [],
         known_drops=known_drops or [],

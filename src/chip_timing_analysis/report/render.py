@@ -31,40 +31,40 @@ _MISSED_READ_CAVEAT = (
 
 
 def _reconcile_backup(report: RaceReport) -> dict:
-    """Split finish misses into "recovered via backup" vs. "not covered by
-    backup at all". The latter is further split using RaceReport.known_drops:
-    a confirmed legitimate DNF (e.g. Indy bib 658 -- started, never finished,
-    genuinely nothing to record) vs. a finish miss that's still unexplained
-    and should be flagged as needing review. When we have RDS's own backup
-    report, also split recovered cases into "no read at all" vs. "had a valid
-    read that didn't reach live scoring" (network interruption).
+    """Split the *genuine* finish misses (excludes confirmed drops -- see
+    RaceReport.genuine_finish_miss_bibs) into "recovered via backup" vs.
+    "not covered by backup at all, still unexplained". Confirmed drops are
+    reported as their own separate bucket, not nested inside either of these
+    -- a drop was never going to have a finish read in the first place, so
+    it isn't a finish miss that needs recovering or reviewing (caught once
+    already: an earlier version counted drops as a subset of "unrecovered
+    finish misses", which inflated the headline miss count/percentage with
+    something that isn't actually a miss). When we have RDS's own backup
+    report, also split recovered cases into "no read at all" vs. "had a
+    valid read that didn't reach live scoring" (network interruption).
     """
-    finish_miss_bibs = report.finish_miss_bibs()
-    known_drop_bibs = set(report.known_drops)
+    miss_bibs = report.genuine_finish_miss_bibs()
+    drop_bibs = sorted(set(report.known_drops) & report.finish_miss_bibs())
 
     if report.backup is None:
-        unrecovered_bibs = sorted(finish_miss_bibs)
-        base = {"available": False, "n_backup": None, "n_zero_read": len(finish_miss_bibs), "n_network": None, "network_bibs": []}
+        unrecovered_bibs = sorted(miss_bibs)
+        base = {"available": False, "n_backup": None, "n_zero_read": len(miss_bibs), "n_network": None, "network_bibs": []}
     else:
         backup_bibs = set(report.backup["bib"])
-        network_bibs = sorted(backup_bibs - finish_miss_bibs)
-        unrecovered_bibs = sorted(finish_miss_bibs - backup_bibs)
+        network_bibs = sorted(backup_bibs - report.finish_miss_bibs())
+        unrecovered_bibs = sorted(miss_bibs - backup_bibs)
         base = {
             "available": True,
             "n_backup": len(backup_bibs),
-            "n_zero_read": len(finish_miss_bibs & backup_bibs),
+            "n_zero_read": len(miss_bibs & backup_bibs),
             "n_network": len(network_bibs),
             "network_bibs": network_bibs,
         }
 
-    review_bibs = sorted(set(unrecovered_bibs) - known_drop_bibs)
-    drop_bibs = sorted(set(unrecovered_bibs) & known_drop_bibs)
     return {
         **base,
         "n_unrecovered": len(unrecovered_bibs),
         "unrecovered_bibs": unrecovered_bibs,
-        "n_review": len(review_bibs),
-        "review_bibs": review_bibs,
         "n_drops": len(drop_bibs),
         "drop_bibs": drop_bibs,
     }
@@ -90,7 +90,7 @@ def _render_read_reliability(report: RaceReport, include_bibs: bool) -> list[str
     """
     r = report
     recon = _reconcile_backup(r)
-    n_finish_miss = len(r.finish_miss_bibs())
+    n_finish_miss = len(r.genuine_finish_miss_bibs())  # excludes confirmed drops -- see known_drops
 
     def bibs(key: str) -> str:
         return f" ({', '.join(str(b) for b in recon[key])})" if include_bibs and recon[key] else ""
@@ -117,11 +117,13 @@ def _render_read_reliability(report: RaceReport, include_bibs: bool) -> list[str
         lines.append("- Backup-timing coverage not available for this race (no Data Check report provided).")
 
     if recon["n_unrecovered"]:
-        lines.append(f"- Of those {n_finish_miss} finish misses, {recon['n_unrecovered']} were NOT covered by backup timing at all:")
-        if recon["n_drops"]:
-            lines.append(f"  - {recon['n_drops']} confirmed as a drop (started, did not finish) -- expected, not a data issue{bibs('drop_bibs')}.")
-        if recon["n_review"]:
-            lines.append(f"  - **{recon['n_review']} remain unexplained** -- needs review{bibs('review_bibs')}.")
+        lines.append(f"- **{recon['n_unrecovered']} of those {n_finish_miss} finish misses remain unexplained** -- not covered by backup timing, needs review{bibs('unrecovered_bibs')}.")
+
+    if recon["n_drops"]:
+        lines.append(
+            f"- Separately, {recon['n_drops']} confirmed drop(s) (started, did not finish) had no finish read, "
+            f"as expected -- not counted as a finish miss{bibs('drop_bibs')}."
+        )
 
     lines.append(f"- {len(r.missed_start_only)} result(s) had no chip read at the start line.")
     return lines
@@ -147,6 +149,38 @@ def _render_finish_density(report: RaceReport, verbose: bool) -> list[str]:
     ending = (lambda p: f", ending near {_fmt_ts(p['finish_time'])}") if verbose else (lambda p: "")
     lines.append(f"- Peak density: {peak_std['finishers_in_window']} finishers in a 60s window{ending(peak_std)}.")
     lines.append(f"- Peak burst: {peak_burst['finishers_in_window']} finishers in a 15s window{ending(peak_burst)}.")
+    return lines
+
+
+def _render_mat_diagnostics(report: RaceReport) -> list[str]:
+    """Per-mat raw-read diagnostics (see mat_reliability.py) -- detailed
+    report only, never sanitized (mat-level equipment detail isn't
+    client-facing). De-emphasized to a single reassuring line unless
+    mat_reliability_verdict flags a systemic_signal, per Lou's call: this is
+    a "worth checking" caveat, not a headline metric.
+    """
+    v = report.mat_reliability_verdict
+    if v is None or v["n_mats"] == 0:
+        return []
+
+    lines = ["", "## Raw Read / Antenna Diagnostics"]
+    if not v["systemic_signal"]:
+        lines.append(
+            f"- No antenna anomalies detected: read coverage and signal strength across all {v['n_mats']} mats "
+            f"were consistent with each mat's immediate neighbors (some tapering from the middle of the mat "
+            f"run toward the edges is normal and not flagged)."
+        )
+    else:
+        lines.append(
+            f"- **Possible cabling/power issue**: mat(s) {', '.join(str(m) for m in v['weak_mats'])} read well "
+            f"below their immediate neighbors (in tag coverage and/or signal strength) -- worth a physical "
+            f"check of that mat/antenna/cable before the next race."
+        )
+        lines += ["", "Per-mat raw read summary:", "| mat_id | n_reads | unique_tags | reads_per_tag | mean signal | |", "|---|---|---|---|---|---|"]
+        for _, row in report.mat_summary.iterrows():
+            flag = "**weak**" if row["mat_id"] in v["weak_mats"] else ""
+            signal = f"{row['mean_signal_strength']:.1f}" if pd.notna(row["mean_signal_strength"]) else ""
+            lines.append(f"| {row['mat_id']} | {row['n_reads']} | {row['n_unique_tags']} | {row['reads_per_tag']:.1f} | {signal} | {flag} |")
     return lines
 
 
@@ -229,12 +263,19 @@ def render_detailed_report(report: RaceReport) -> str:
             tm_row = r.tm_data[r.tm_data["bib"] == row["bib"]]
             finish_time = _fmt_ts(tm_row["finish_time"].iloc[0]) if not tm_row.empty else _fmt_ts(row["finish_time"])
             lines.append(f"| {row['bib']} | {row['name']} | {finish_time} | {reason} |")
-        if recon["n_unrecovered"]:
-            lines += ["", f"### NOT covered by backup timing ({recon['n_unrecovered']}) -- no finish read and no backup entry either"]
-            if recon["n_drops"]:
-                lines.append(f"- Confirmed drops (started, did not finish): {', '.join(str(b) for b in recon['drop_bibs'])}")
-            if recon["n_review"]:
-                lines.append(f"- **Needs review** (unexplained): {', '.join(str(b) for b in recon['review_bibs'])}")
+
+    # Drop reporting doesn't depend on r.backup being supplied -- known_drops
+    # is Lou's own manual confirmation, not derived from the backup report
+    # (a drop typically has no backup entry either, since there was nothing
+    # to recover).
+    if recon["n_unrecovered"]:
+        lines += ["", f"### Finish misses NOT covered by backup timing ({recon['n_unrecovered']}) -- unexplained, needs review"]
+        lines.append(", ".join(str(b) for b in recon["unrecovered_bibs"]))
+    if recon["n_drops"]:
+        lines += ["", f"### Confirmed drops ({recon['n_drops']}) -- started, did not finish (not counted as a finish miss)"]
+        lines.append(", ".join(str(b) for b in recon["drop_bibs"]))
+
+    lines += _render_mat_diagnostics(r)
 
     lines += ["", "## Finish-to-Bib-Scan Queue Lag"]
     if r.lag is None:
@@ -266,6 +307,15 @@ def render_detailed_report(report: RaceReport) -> str:
 def render_sanitized_report(report: RaceReport) -> str:
     r = report
     lines = [
+        # YAML front matter: sets the page's nav/browser-tab title to the race
+        # date rather than the generic "Race Timing Summary" H1 below -- with
+        # many races published over time, the date is what distinguishes one
+        # from another in a nav list (MkDocs reads `title` from front matter
+        # in preference to the first heading; see CLAUDE.md).
+        "---",
+        f"title: {r.race_date}",
+        "---",
+        "",
         "# Race Timing Summary",
         f"_Race date: {r.race_date} | Distance: {r.distance}_",
         "",
@@ -283,44 +333,78 @@ def render_sanitized_report(report: RaceReport) -> str:
     return "\n".join(lines) + "\n"
 
 
+_NOTES_CELL_MAX_LEN = 60
+
+
+def _summary_notes_cell(report: RaceReport) -> str:
+    """Notes cell for the summary table -- short by design (the mkdocs table
+    render blows up vertically if this column has to wrap long free text;
+    the full sentence is still available on the linked per-race page). Also
+    folds in a no-chip-assigned count when nonzero: this stems from a rare
+    check-in/print-run process problem, not a chip-timing metric, so it
+    doesn't warrant its own permanent column -- surfacing it in Notes only
+    when it actually happens is enough."""
+    r = report
+    notes = list(r.notes)
+    if len(r.no_chip_assigned):
+        notes = [f"{len(r.no_chip_assigned)} no chip assigned"] + notes
+    if not notes:
+        return "—"
+    text = "; ".join(notes)
+    if len(text) > _NOTES_CELL_MAX_LEN:
+        text = text[: _NOTES_CELL_MAX_LEN].rstrip() + "…"
+    return text
+
+
 def render_summary_row(report: RaceReport) -> str:
     """A single markdown table row summarizing this race, for the running
-    cross-race summary."""
+    cross-race summary. The Date cell links to that race's sanitized report
+    (`<race_date>.md`) -- relies on the summary file and the per-race
+    sanitized reports living side by side in the same directory (true both
+    of this repo's reports/ and its copy under fsrc-tech's
+    docs/race-services/reports/, see CLAUDE.md)."""
     r = report
-    n_finish_miss = len(r.finish_miss_bibs())
+    n_finish_miss = len(r.genuine_finish_miss_bibs())  # excludes confirmed drops -- see known_drops
     peak_density = r.density_rolling["finishers_in_window"].max()
     peak_burst = r.density_rolling_burst["finishers_in_window"].max()
-    notes_cell = "; ".join(r.notes) if r.notes else "—"
 
     return (
-        f"| {r.race_date} | {r.distance} | {r.n_participants} | {len(r.no_chip_assigned)} | "
+        f"| [{r.race_date}]({r.race_date}.md) | {r.distance} | {r.n_participants} | "
         f"{len(r.zero_reads)} | {len(r.missed_start_only)} | {n_finish_miss} | "
-        f"{r.pct_read_opportunities_missed():.1f}% | {peak_density} | {peak_burst} | {notes_cell} |"
+        f"{r.pct_read_opportunities_missed():.1f}% | {peak_density} | {peak_burst} | {_summary_notes_cell(r)} |"
     )
 
 
 _SUMMARY_HEADER = (
-    "# Running Timing Summary\n\n"
-    "One row per race analyzed. \"Chips Not Read at Finish\" = zero-reads + missed-finish-only "
-    "bibs (our own computed count). \"% Missed\" = share of all chip read opportunities "
-    "(start + finish) that went unread. \"Peak (60s)\" matches the finish-line-timing field's "
-    "standard runners-per-minute convention; \"Peak (15s)\" is a shorter burst window that "
+    "# Timing Summary\n\n"
+    "One row per race analyzed, most recent first. \"Chips Not Read at Finish\" = zero-reads + "
+    "missed-finish-only bibs (our own computed count). \"% Missed\" = share of all chip read "
+    "opportunities (start + finish) that went unread. \"Peak (60s)\" matches the finish-line-timing "
+    "field's standard runners-per-minute convention; \"Peak (15s)\" is a shorter burst window that "
     "catches short clusters a 60s window can smooth over -- more typical of FSRC's small-field "
-    "races. See the per-race sanitized report for the recovered-vs-unrecovered backup-timing "
-    "breakdown.\n\n"
-    "| Date | Distance | Participants | No Chip | Zero Reads | Missed Start | Chips Not Read at Finish | "
+    "races. Notes are kept short here (full detail is on the linked per-race report); a no-chip-"
+    "assigned count only appears here when a race actually had one (rare process problem, not a "
+    "permanent column). See the per-race sanitized report for the recovered-vs-unrecovered "
+    "backup-timing breakdown.\n\n"
+    "| Date | Distance | Participants | Zero Reads | Missed Start | Chips Not Read at Finish | "
     "% Missed | Peak (60s) | Peak (15s) | Notes |\n"
-    "|---|---|---|---|---|---|---|---|---|---|---|\n"
+    "|---|---|---|---|---|---|---|---|---|---|\n"
 )
 
 
 def append_summary_row(report: RaceReport, summary_path: str | Path) -> None:
-    """Append this race's row to the running cross-race summary table,
+    """Prepend this race's row to the running cross-race summary table (most
+    recent race first, so newer races don't get buried as the table grows),
     creating the file (with header) if it doesn't exist yet."""
     summary_path = Path(summary_path)
+    row = render_summary_row(report) + "\n"
+
     if not summary_path.exists():
         summary_path.parent.mkdir(parents=True, exist_ok=True)
-        summary_path.write_text(_SUMMARY_HEADER, encoding="utf-8")
+        summary_path.write_text(_SUMMARY_HEADER + row, encoding="utf-8")
+        return
 
-    with summary_path.open("a", encoding="utf-8") as f:
-        f.write(render_summary_row(report) + "\n")
+    lines = summary_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    separator_idx = next(i for i, line in enumerate(lines) if line.startswith("|---"))
+    lines.insert(separator_idx + 1, row)
+    summary_path.write_text("".join(lines), encoding="utf-8")
