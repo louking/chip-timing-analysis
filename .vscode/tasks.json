@@ -41,6 +41,17 @@
             "type": "promptString",
             "description": "Optional bib/name-free note about an unusual occurrence (leave blank for none)",
             "default": ""
+        },
+        {
+            "id": "publishRaceDate",
+            "type": "promptString",
+            "description": "Race date to publish, YYYY-MM-DD -- must match an existing reports/<date>.md"
+        },
+        {
+            "id": "fsrcTechDir",
+            "type": "promptString",
+            "description": "Path to a local fsrc-tech checkout",
+            "default": "../../fsrc-tech/fsrc-tech"
         }
     ],
     "tasks": [
@@ -56,6 +67,25 @@
                 "--distance", "${input:distance}",
                 "--gun-time", "${input:gunTime}",
                 "--note", "${input:note}"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            }
+        },
+        {
+            "label": "Chip Timing: Publish Report to fsrc-tech",
+            "detail": "Copies reports/<date>.md and SUMMARY.md into a local fsrc-tech checkout. Does not commit/push there -- see the task's own printed reminder.",
+            "type": "shell",
+            "command": ".venv/Scripts/python.exe",
+            "args": [
+                "-m", "chip_timing_analysis.report.publish",
+                "${input:publishRaceDate}",
+                "${input:fsrcTechDir}"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"

@@ -7,6 +7,9 @@ the source of truth — bump it by hand and tag the commit `vX.Y.Z`).
 
 ## [Unreleased]
 
+### Added
+- `report/publish.py`: copies a race's sanitized report and the running summary (`reports/<race_date>.md`, `reports/SUMMARY.md`) into a local fsrc-tech checkout's `docs/race-services/reports/` folder (`python -m chip_timing_analysis.report.publish <race_date> <fsrc_tech_dir>`, or the new "Chip Timing: Publish Report to fsrc-tech" VS Code task). Automates only the file-copy steps of the publishing workflow — adding a fsrc-tech `CHANGELOG.md` entry and committing/pushing there stays a manual, deliberate step, per Lou's call not to run those proactively.
+
 ## [0.2.0] - 2026-07-12
 
 ### Added
