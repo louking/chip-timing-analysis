@@ -47,9 +47,14 @@ def parse_backup_time_selected(file_path: str | Path, race_date: str | dt.date |
     df.columns = [c.strip() for c in df.columns]
 
     def to_ts(col: str) -> pd.Series:
+        # Chip Start Time of Day is blank for a bib with no chip assigned at
+        # all (backup was its only possible source, so there's no chip start
+        # to report) -- leave those as NaT rather than failing the parse.
+        blank = df[col].isna() | (df[col].astype(str).str.strip() == "")
         if race_date is None:
-            return pd.to_datetime(df[col]).dt.time
-        return pd.to_datetime(str(race_date) + " " + df[col].astype(str))
+            parsed = pd.to_datetime(df[col].mask(blank), errors="coerce")
+            return parsed.dt.time
+        return pd.to_datetime(str(race_date) + " " + df[col].mask(blank, "").astype(str), errors="coerce")
 
     if "Backup Time Selected" in df.columns:
         backup_time_selected = df["Backup Time Selected"].astype(str).str.strip().str.lower().eq("yes")

@@ -5,3 +5,5 @@ One row per race analyzed, most recent first. "Chips Not Read at Finish" = zero-
 | Date | Distance | Participants | Zero Reads | Missed Start | Chips Not Read at Finish | % Missed | Peak (60s) | Peak (15s) | Notes |
 |---|---|---|---|---|---|---|---|---|---|
 | [2026-07-04](2026-07-04.md) | 5K | 111 | 0 | 1 | 3 | 1.8% | 9 | 5 | Brief live-network interruption ~09:05:51-09:06:52 (~1 min);… |
+| [2026-05-25](2026-05-25.md) | 5K | 261 | 0 | 5 | 3 | 1.5% | 27 | 11 | 12 no chip assigned; 12 participants were not assigned a chi… |
+| [2026-04-04](2026-04-04.md) | 5K & 10K | 87 | 0 | 1 | 1 | 1.1% | 7 | 5 | — |

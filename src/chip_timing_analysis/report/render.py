@@ -6,6 +6,7 @@ summary table.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -51,7 +52,15 @@ def _reconcile_backup(report: RaceReport) -> dict:
         base = {"available": False, "n_backup": None, "n_zero_read": len(miss_bibs), "n_network": None, "network_bibs": []}
     else:
         backup_bibs = set(report.backup["bib"])
-        network_bibs = sorted(backup_bibs - report.finish_miss_bibs())
+        # A backup-used bib that isn't a finish miss usually means "chip read
+        # existed locally but didn't reach live scoring" (network interruption)
+        # -- but a bib with no chip assigned at all is *also* backup-used and
+        # *also* absent from finish_miss_bibs (it was never eligible to be
+        # counted as a chip-read miss), for an entirely different, already
+        # -reported reason. Exclude those so they aren't double-counted here
+        # under the wrong explanation.
+        no_chip_bibs = set(report.no_chip_assigned["bib"])
+        network_bibs = sorted(backup_bibs - report.finish_miss_bibs() - no_chip_bibs)
         unrecovered_bibs = sorted(miss_bibs - backup_bibs)
         base = {
             "available": True,
@@ -250,11 +259,17 @@ def render_detailed_report(report: RaceReport) -> str:
     recon = _reconcile_backup(r)
     if r.backup is not None:
         finish_miss_bibs = r.finish_miss_bibs()
+        no_chip_bibs = set(r.no_chip_assigned["bib"])
         lines += ["", f"### Backup timing used ({len(r.backup)})"]
         lines.append("| bib | name | finish_time | reason |")
         lines.append("|---|---|---|---|")
         for _, row in r.backup.iterrows():
-            reason = "no antenna read at finish" if row["bib"] in finish_miss_bibs else "read existed locally but didn't reach live scoring (network interruption)"
+            if row["bib"] in finish_miss_bibs:
+                reason = "no antenna read at finish"
+            elif row["bib"] in no_chip_bibs:
+                reason = "no chip assigned"
+            else:
+                reason = "read existed locally but didn't reach live scoring (network interruption)"
             # finish_time comes from tm-data.csv, not the backup report's own value --
             # the two are the same crossing, just recorded to different precision (tenths
             # vs. hundredths), which read as a data mismatch. tm-data.csv is the reliable,
@@ -392,10 +407,18 @@ _SUMMARY_HEADER = (
 )
 
 
+_SUMMARY_DATE_RE = re.compile(r"^\| \[(\d{4}-\d{2}-\d{2})\]")
+
+
 def append_summary_row(report: RaceReport, summary_path: str | Path) -> None:
-    """Prepend this race's row to the running cross-race summary table (most
-    recent race first, so newer races don't get buried as the table grows),
-    creating the file (with header) if it doesn't exist yet."""
+    """Insert this race's row into the running cross-race summary table,
+    sorted by race date descending (most recent race first, so newer races
+    don't get buried as the table grows) -- NOT insertion order, which
+    silently goes wrong the moment a race is (re-)generated out of
+    chronological order (e.g. re-running an earlier race's report after a
+    later one has already been added). Re-generating the same race replaces
+    its existing row in place rather than appending a duplicate. Creates the
+    file (with header) if it doesn't exist yet."""
     summary_path = Path(summary_path)
     row = render_summary_row(report) + "\n"
 
@@ -406,5 +429,11 @@ def append_summary_row(report: RaceReport, summary_path: str | Path) -> None:
 
     lines = summary_path.read_text(encoding="utf-8").splitlines(keepends=True)
     separator_idx = next(i for i, line in enumerate(lines) if line.startswith("|---"))
-    lines.insert(separator_idx + 1, row)
-    summary_path.write_text("".join(lines), encoding="utf-8")
+    header_lines = lines[: separator_idx + 1]
+    existing_rows = [
+        line for line in lines[separator_idx + 1 :]
+        if _SUMMARY_DATE_RE.match(line) and _SUMMARY_DATE_RE.match(line).group(1) != report.race_date
+    ]
+    all_rows = existing_rows + [row]
+    all_rows.sort(key=lambda line: _SUMMARY_DATE_RE.match(line).group(1), reverse=True)
+    summary_path.write_text("".join(header_lines + all_rows), encoding="utf-8")

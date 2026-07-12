@@ -5,7 +5,10 @@ race-services/timing.md, and Lou's RDS setup checklist): the same physical
 mat set can serve both the start and finish line, so mat_id can't be used to
 tell crossings apart. Instead, classify by time-of-day + Gap Factor:
 
-  - start:  reads in [gun_time, gun_time + start_offset] -- use the LS read.
+  - start:  reads in [gun_time - pre_gun_grace, gun_time + start_offset] -- use
+            the LS read. pre_gun_grace is a small allowance for front-of-field
+            runners whose chip crosses a fraction of a second before the
+            automatic GUNTIME marker registers.
   - finish: reads at/after gun_time + gap_factor, split into occurrences
             wherever the gap since the tag's previous read >= gap_factor;
             take the BS read of the first such occurrence (RDS's
@@ -32,6 +35,15 @@ GAP_FACTOR_BY_DISTANCE = {
 }
 
 DEFAULT_START_OFFSET = pd.Timedelta(minutes=2)  # RDS "Max Chip Start Time Offset"
+
+# A few runners right at the front of the field cross the start mats a fraction
+# of a second before the automatic GUNTIME marker registers (observed on the
+# Parkway Panda 5K: 3 bibs with a clean LS read 0.04-0.30s before gun_time,
+# with no other start-window read -- without this grace period they showed up
+# as "missed start" even though they plainly weren't). Small enough to not
+# scoop up genuine pre-race noise (e.g. a bench-test chip read tens of minutes
+# before gun_time), per Lou.
+DEFAULT_PRE_GUN_GRACE = pd.Timedelta(seconds=1)
 
 
 def _split_occurrences(reads: pd.DataFrame, gap_factor: pd.Timedelta) -> pd.DataFrame:
@@ -63,6 +75,7 @@ def classify_start_finish(
     gun_time: dt.datetime,
     gap_factor: pd.Timedelta,
     start_offset: pd.Timedelta = DEFAULT_START_OFFSET,
+    pre_gun_grace: pd.Timedelta = DEFAULT_PRE_GUN_GRACE,
 ) -> pd.DataFrame:
     """Classify each bib's start and finish crossing from filtered (BS/LS) reads.
 
@@ -75,7 +88,7 @@ def classify_start_finish(
     """
     reads = reads.merge(bib_chip[["bib", "tag_id"]], on="tag_id", how="inner")
 
-    start_window = reads[reads["timestamp"].between(gun_time, gun_time + start_offset)]
+    start_window = reads[reads["timestamp"].between(gun_time - pre_gun_grace, gun_time + start_offset)]
     finish_window = reads[reads["timestamp"] >= gun_time + gap_factor]
 
     starts = _first_occurrence_picks(_split_occurrences(start_window, gap_factor), "LS", "start_time", "start_n_reads")
