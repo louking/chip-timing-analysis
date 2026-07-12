@@ -1,0 +1,70 @@
+{
+    "version": "2.0.0",
+    "inputs": [
+        {
+            "id": "raceDir",
+            "type": "promptString",
+            "description": "Race directory (e.g. data/2026-07-04-indy-5000)"
+        },
+        {
+            "id": "raceName",
+            "type": "promptString",
+            "description": "Race name -- leave blank to derive from the RDS export zip, if race_dir has one",
+            "default": ""
+        },
+        {
+            "id": "raceDate",
+            "type": "promptString",
+            "description": "Race date, YYYY-MM-DD -- leave blank to derive from the RDS export zip's gun time",
+            "default": ""
+        },
+        {
+            "id": "distance",
+            "type": "pickString",
+            "description": "Race distance (Gap Factor lookup key) -- pick auto-detect if race_dir has an RDS export zip",
+            "options": [
+                { "label": "(auto-detect from RDS export)", "value": "" },
+                "5K",
+                "10K",
+                "10M"
+            ],
+            "default": "(auto-detect from RDS export)"
+        },
+        {
+            "id": "gunTime",
+            "type": "promptString",
+            "description": "Gun time, e.g. 2026-07-04 08:30:02 -- leave blank if race_dir has an RDS export zip",
+            "default": ""
+        },
+        {
+            "id": "note",
+            "type": "promptString",
+            "description": "Optional bib/name-free note about an unusual occurrence (leave blank for none)",
+            "default": ""
+        }
+    ],
+    "tasks": [
+        {
+            "label": "Chip Timing: Generate Race Report",
+            "type": "shell",
+            "command": ".venv/Scripts/python.exe",
+            "args": [
+                "-m", "chip_timing_analysis.report.generate",
+                "${input:raceDir}",
+                "--race-name", "${input:raceName}",
+                "--race-date", "${input:raceDate}",
+                "--distance", "${input:distance}",
+                "--gun-time", "${input:gunTime}",
+                "--note", "${input:note}"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            }
+        }
+    ]
+}
