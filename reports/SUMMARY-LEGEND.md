@@ -1,6 +1,8 @@
 # Timing Summary — Column Legend
 
-- **Chips Not Read at Finish** — zero-reads + missed-finish-only bibs (our own computed count).
+- **Zero Reads** — chip assigned, but no read at either start or finish (a subset of both Missed Start and Missed Finish below).
+- **Missed Start** — Zero Reads + missed-start-only bibs (our own computed count).
+- **Missed Finish** — Zero Reads + missed-finish-only bibs (our own computed count).
 - **% Missed** — share of all chip read opportunities (start + finish) that went unread.
 - **Peak (60s)** — matches the finish-line-timing field's standard runners-per-minute convention.
 - **Peak (15s)** — a shorter burst window that catches short clusters a 60s window can smooth over — more typical of FSRC's small-field races.

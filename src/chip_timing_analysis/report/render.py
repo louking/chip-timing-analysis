@@ -143,7 +143,7 @@ def _render_read_reliability(report: RaceReport, include_bibs: bool) -> list[str
             f"as expected -- not counted as a finish miss{bibs('drop_bibs')}."
         )
 
-    lines.append(f"- {len(r.missed_start_only)} result(s) had no chip read at the start line.")
+    lines.append(f"- {len(r.genuine_start_miss_bibs())} result(s) had no chip read at the start line.")
     return lines
 
 
@@ -388,13 +388,14 @@ def render_summary_row(report: RaceReport) -> str:
     of this repo's reports/ and its copy under fsrc-tech's
     docs/race-services/reports/, see CLAUDE.md)."""
     r = report
-    n_finish_miss = len(r.genuine_finish_miss_bibs())  # excludes confirmed drops -- see known_drops
+    n_start_miss = len(r.genuine_start_miss_bibs())  # includes zero_reads; excludes confirmed drops
+    n_finish_miss = len(r.genuine_finish_miss_bibs())  # includes zero_reads; excludes confirmed drops
     peak_density = r.density_rolling["finishers_in_window"].max()
     peak_burst = r.density_rolling_burst["finishers_in_window"].max()
 
     return (
         f"| [{r.race_date}]({r.race_date}.md) | {r.distance} | {r.n_participants} | "
-        f"{len(r.zero_reads)} | {len(r.missed_start_only)} | {n_finish_miss} | "
+        f"{len(r.zero_reads)} | {n_start_miss} | {n_finish_miss} | "
         f"{r.pct_read_opportunities_missed():.1f}% | {peak_density} | {peak_burst} | {_summary_notes_cell(r)} |"
     )
 
@@ -405,7 +406,7 @@ _SUMMARY_HEADER = (
     "# Timing Summary\n\n"
     f"One row per race analyzed, most recent first. See the [column legend]({_SUMMARY_LEGEND_FILENAME}) "
     "for what each column means.\n\n"
-    "| Date | Distance | Participants | Zero Reads | Missed Start | Chips Not Read at Finish | "
+    "| Date | Distance | Participants | Zero Reads | Missed Start | Missed Finish | "
     "% Missed | Peak (60s) | Peak (15s) | Notes |\n"
     "|---|---|---|---|---|---|---|---|---|---|\n"
 )
@@ -419,8 +420,12 @@ def render_summary_legend() -> str:
     even though its content doesn't depend on any particular race."""
     return (
         "# Timing Summary — Column Legend\n\n"
-        "- **Chips Not Read at Finish** — zero-reads + missed-finish-only bibs "
-        "(our own computed count).\n"
+        "- **Zero Reads** — chip assigned, but no read at either start or "
+        "finish (a subset of both Missed Start and Missed Finish below).\n"
+        "- **Missed Start** — Zero Reads + missed-start-only bibs (our own "
+        "computed count).\n"
+        "- **Missed Finish** — Zero Reads + missed-finish-only bibs (our own "
+        "computed count).\n"
         "- **% Missed** — share of all chip read opportunities (start + finish) "
         "that went unread.\n"
         "- **Peak (60s)** — matches the finish-line-timing field's standard "

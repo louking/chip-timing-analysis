@@ -65,7 +65,12 @@ class RaceReport:
     # (e.g. a bib handed out with no chip attached -- doesn't show up as a
     # "missed read" since there's no bib-chip.csv row to read against).
     no_chip_assigned: pd.DataFrame = None  # participant bibs with no bib-chip.csv entry at all
-    zero_reads: pd.DataFrame = None  # chip assigned, but no start AND no finish read
+    # chip assigned, no start read, no finish read. By construction always
+    # "recorded by Time Machine" in Lou's sense: a zero-chip-read bib only
+    # reaches `participant_bibs` in the first place via a tm-data.csv (Time
+    # Machine/backup) entry or a chip read of its own -- with zero chip
+    # reads, only the Time Machine route remains. No separate check needed.
+    zero_reads: pd.DataFrame = None
     missed_start_only: pd.DataFrame = None  # has a finish read, but no start read
     missed_finish_only: pd.DataFrame = None  # has a start read, but no finish read
 
@@ -127,10 +132,30 @@ class RaceReport:
         """finish_miss_bibs() minus confirmed drops (known_drops). A
         confirmed drop (started, did not finish) has no finish read by
         definition -- there was never a finish to read -- so it isn't a
-        chip-reading failure and shouldn't count toward "chips not read at
-        finish" or the missed-read percentage. Use this, not
-        finish_miss_bibs(), for any headline miss count/percentage."""
+        chip-reading failure and shouldn't count toward "Missed Finish" (the
+        headline "chips not read at finish" number) or the missed-read
+        percentage. Use this, not finish_miss_bibs(), for any headline miss
+        count/percentage."""
         return self.finish_miss_bibs() - set(self.known_drops)
+
+    def start_miss_bibs(self) -> set:
+        """All bibs with no start read: zero_reads + missed_start_only.
+        Mirrors finish_miss_bibs() -- see genuine_start_miss_bibs() for the
+        version that excludes confirmed drops."""
+        return set(self.zero_reads["bib"]) | set(self.missed_start_only["bib"])
+
+    def genuine_start_miss_bibs(self) -> set:
+        """start_miss_bibs() minus confirmed drops (known_drops), mirroring
+        genuine_finish_miss_bibs(). A confirmed drop is expected to have
+        started (see known_drops' own docstring: "started, did not
+        finish"), so this rarely differs from start_miss_bibs() in practice
+        -- but if a drop somehow also has no recorded start read, it
+        shouldn't inflate the "Missed Start" headline any more than a drop's
+        missing finish inflates "Missed Finish". Use this, not
+        start_miss_bibs() or missed_start_only alone, for the "Missed
+        Start" headline count -- per Lou (2026-07-13), that headline should
+        include zero_reads bibs too, not just missed_start_only."""
+        return self.start_miss_bibs() - set(self.known_drops)
 
     def pct_read_opportunities_missed(self) -> float:
         """% of (participant x 2 opportunities: start + finish) that went
@@ -206,33 +231,73 @@ def _rdgo_distance_label(rdgo: rdgo_export.RdgoExport) -> str:
     return " & ".join(labels[gap] for gap in sorted(labels))
 
 
-def _network_interruption_suspects(
-    rdgo: rdgo_export.RdgoExport,
+def _backfill_from_local_log(
     classified_all: pd.DataFrame,
-    reads: pd.DataFrame,
-    bib_chip: pd.DataFrame,
+    csv_classified: pd.DataFrame,
+    rdgo: rdgo_export.RdgoExport,
+    trident_device_id: int | None,
     gun_time: pd.Timestamp,
-    bib_gap_factors: dict,
-) -> list[int]:
-    """Cross-check every rdgo-reported miss against the local Trident log --
-    see RaceReport.network_interruption_suspects. reads/bib_chip are the same
-    f_*.log/rdgo-derived bib-chip mapping already loaded by the caller."""
-    csv_classified = _csv_classify_grouped(reads, bib_chip, gun_time, bib_gap_factors)
-    csv_by_bib = csv_classified.set_index("bib")
-    rdgo_by_bib = classified_all.set_index("bib")
-    miss_bibs = set(missed_start_reads(classified_all)["bib"]) | set(missed_finish_reads(classified_all)["bib"])
+) -> tuple[pd.DataFrame, list[int]]:
+    """Backfill a start/finish value from the local Trident device log
+    (csv_classified, built from f_*.log via _csv_classify_grouped) wherever
+    RDS's own read_data lacks a chip-sourced value for it. Covers two
+    distinct cases that are really the same underlying mechanism -- "does
+    the local device log know something RDS's own record doesn't" -- run as
+    one pass and told apart only by whether the recovered start is before
+    gun_time:
 
-    suspects = []
-    for bib in sorted(miss_bibs):
+    1. Pre-gun-grace starts: a front-of-field runner's chip crosses a
+       fraction of a second before the automatic GUNTIME marker registers.
+       RDS's own occurrence classification has no equivalent grace period
+       (analysis/start_finish.py's own pre_gun_grace fix for this), so
+       read_data simply lacks occurrence 1 -- indistinguishable in shape
+       from a genuine missed start (found on Panda 5K: bibs 180/314/349).
+       Backfilled silently, not flagged -- this isn't a network issue.
+
+    2. Live-network dropouts (any post-gun start, or any finish): the local
+       Trident device recorded a real read that never reached RDS live
+       (Indy's 576/591 pattern -- read_data only reflects what reached RDS,
+       not what the device itself logged, per Lou: "the Trident logs are a
+       good backup, e.g. in case of network interruption"). Backfilled AND
+       returned as a network_interruption_suspect, since the chip did its
+       job here and this shouldn't render as an ordinary "missed" case --
+       see RaceReport.network_interruption_suspects.
+
+    Found 2026-07-13 the first time Indy 5000's own zip was run through this
+    path: the previous version of this cross-check (compared against the
+    backup-inclusive classified_all, which already had 576/591's finish_time
+    filled in from Time Machine) never actually detected anything, so those
+    two bibs silently rendered as ordinary chip misses instead of network
+    interruptions. Restores the CSV-path's previously-validated numbers
+    (missed_start_only {641}, genuine finish misses {598,606,630}, network
+    interruption suspects {576,591}) via the rdgo path too.
+    """
+    classified_all = classified_all.copy()
+    csv_by_bib = csv_classified.set_index("bib")
+    is_start_chip = classified_all["start_device_id"].map(lambda d: bool(rdgo_export.is_chip_device(rdgo, d)))
+    is_finish_chip = classified_all["finish_device_id"].map(lambda d: bool(rdgo_export.is_chip_device(rdgo, d)))
+
+    suspects = set()
+    for idx in classified_all.index:
+        bib = classified_all.at[idx, "bib"]
         if bib not in csv_by_bib.index:
             continue
-        rdgo_row = rdgo_by_bib.loc[bib]
         csv_row = csv_by_bib.loc[bib]
-        if pd.isna(rdgo_row["start_time"]) and pd.notna(csv_row["start_time"]):
-            suspects.append(bib)
-        elif pd.isna(rdgo_row["finish_time"]) and pd.notna(csv_row["finish_time"]):
-            suspects.append(bib)
-    return suspects
+
+        if not is_start_chip.at[idx] and pd.notna(csv_row["start_time"]):
+            classified_all.at[idx, "start_time"] = csv_row["start_time"]
+            classified_all.at[idx, "start_n_reads"] = csv_row["start_n_reads"]
+            classified_all.at[idx, "start_device_id"] = trident_device_id
+            if csv_row["start_time"] >= gun_time:
+                suspects.add(bib)
+
+        if not is_finish_chip.at[idx] and pd.notna(csv_row["finish_time"]):
+            classified_all.at[idx, "finish_time"] = csv_row["finish_time"]
+            classified_all.at[idx, "finish_n_reads"] = csv_row["finish_n_reads"]
+            classified_all.at[idx, "finish_device_id"] = trident_device_id
+            suspects.add(bib)
+
+    return classified_all, sorted(suspects)
 
 
 def build_race_report(
@@ -340,41 +405,19 @@ def build_race_report(
         has_chip_bibs = set(bib_chip["bib"])
         classified_all = classified_all_raw[classified_all_raw["bib"].isin(has_chip_bibs)].reset_index(drop=True)
 
-        # RDS's own occurrence data has no equivalent to pre_gun_grace: a few
-        # front-of-field runners' chips cross a fraction of a second before
-        # the automatic GUNTIME marker registers (analysis/start_finish.py's
-        # own fix for this -- see CLAUDE.md), but read_data simply lacks
-        # occurrence 1 for them, indistinguishable in shape from a genuine
-        # missed start. Backfill specifically that case from the local
-        # Trident log before treating a missing start as real, or this
-        # ingestion path silently regresses a bug already fixed on the CSV
-        # path (found on Panda 5K: bibs 180/314/349). Only the pre-gun-grace
-        # case is backfilled here -- a local read at a normal post-gun time
-        # that RDS's own record still lacks is a different, more concerning
-        # question, left to network_interruption_suspects below rather than
-        # silently patched.
+        # read_data only reflects what reached RDS live -- backfill any
+        # start/finish the local Trident device log (f_*.log) recorded that
+        # RDS's own chip stream doesn't have, before treating either as a
+        # genuine miss. Covers both the pre-gun-grace case (silently
+        # backfilled) and live-network dropouts (backfilled AND returned as
+        # network_interruption_suspects) -- see _backfill_from_local_log().
         if reads is not None:
             csv_classified = _csv_classify_grouped(reads, bib_chip, gun_time, bib_gap_factors)
-            csv_start_by_bib = csv_classified.set_index("bib")["start_time"]
             trident_device_id = next(
                 (device_id for device_id, d in rdgo.devices.items() if d.get("hardware_name")), None
             )
-            missing_start = classified_all["start_time"].isna()
-            for idx in classified_all.index[missing_start]:
-                bib = classified_all.at[idx, "bib"]
-                csv_start = csv_start_by_bib.get(bib)
-                if pd.notna(csv_start) and csv_start < gun_time:
-                    classified_all.at[idx, "start_time"] = csv_start
-                    classified_all.at[idx, "start_n_reads"] = 1
-                    classified_all.at[idx, "start_device_id"] = trident_device_id
-
-        # read_data only reflects what reached RDS live -- cross-check every
-        # remaining rdgo-reported miss against the local Trident log
-        # independently (see RaceReport.network_interruption_suspects), when
-        # we have one.
-        if reads is not None:
-            network_interruption_suspects = _network_interruption_suspects(
-                rdgo, classified_all, reads, bib_chip, gun_time, bib_gap_factors
+            classified_all, network_interruption_suspects = _backfill_from_local_log(
+                classified_all, csv_classified, rdgo, trident_device_id, gun_time
             )
 
         # missed_start_only/missed_finish_only mean "the chip specifically
@@ -388,7 +431,10 @@ def build_race_report(
         # every other purpose (density, lag, the rendered per-bib tables).
         # Caught during Panda 5K validation: without this, bibs 148/277/331
         # (chip missed, backup correctly recovered) were misrendered as
-        # "network interruption" instead of "recovered via backup".
+        # "network interruption" instead of "recovered via backup". The
+        # backfill step above already re-sourced any bib whose local device
+        # log has a read RDS's own chip stream lacks, so "not chip-sourced"
+        # at this point genuinely means "the chip never read it, anywhere".
         is_start_chip = classified_all["start_device_id"].map(lambda d: bool(rdgo_export.is_chip_device(rdgo, d)))
         is_finish_chip = classified_all["finish_device_id"].map(lambda d: bool(rdgo_export.is_chip_device(rdgo, d)))
         chip_only_classified = classified_all.assign(

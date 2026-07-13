@@ -135,11 +135,22 @@ def n_registered(export: RdgoExport) -> int:
     bib_chip()/known_drops() are (via _in_scored_event()). Distinct from
     build.py's n_participants, which is our own data-confirmed count of who
     actually showed up and ran (had a tm-data.csv row or a chip read) --
-    n_registered counts everyone who signed up, whether or not they started."""
+    n_registered counts everyone who signed up, whether or not they started.
+
+    Deliberately does NOT require bib_num -- a no-show (rdgo_dns=True) may
+    never have been assigned a bib at all, so filtering on bib_num undercounts
+    exactly the "signed up but didn't start" registrants this is supposed to
+    include. Found 2026-07-13 on the Lewis Memorial 10 Miler: entity_map had
+    74 entries in the race's one scored event, all correctly _in_scored_event,
+    but only 46 had a bib_num -- the other 28 were all rdgo_dns=True/
+    rdgo_dnf=True no-shows, and the old bib_num filter silently dropped them,
+    reporting 46 "registered" against Lou's actual 74. Never caught on Indy or
+    Panda 5K because every registrant there happened to have a bib_num
+    assigned regardless of whether they started."""
     count = 0
     for e in export.entity_map:
         p = e["entity"]["Participant"]["fields"]
-        if p.get("bib_num") is not None and _in_scored_event(export, p):
+        if _in_scored_event(export, p):
             count += 1
     return count
 
