@@ -10,6 +10,10 @@ the source of truth — bump it by hand and tag the commit `vX.Y.Z`).
 ### Added
 - `report/publish.py`: copies a race's sanitized report and the running summary (`reports/<race_date>.md`, `reports/SUMMARY.md`) into a local fsrc-tech checkout's `docs/race-services/reports/` folder (`python -m chip_timing_analysis.report.publish <race_date> <fsrc_tech_dir>`, or the new "Chip Timing: Publish Report to fsrc-tech" VS Code task). Automates only the file-copy steps of the publishing workflow — adding a fsrc-tech `CHANGELOG.md` entry and committing/pushing there stays a manual, deliberate step, per Lou's call not to run those proactively.
 
+### Fixed
+- `.vscode/tasks.json`'s optional `promptString` inputs (`raceName`/`raceDate`/`gunTime`/`note`) no longer silently abort the whole task when left blank and confirmed with Enter — a `promptString` whose `default` is exactly `""` can resolve as *cancelled* rather than as an empty string in VS Code's own input handling. Now default to a single space `" "` instead; `generate.py`'s blank-detection strips whitespace before checking rather than comparing to exact `""`.
+- The `distance` picker's auto-detect option also had this problem one level deeper: its value of `""` vanished entirely from the assembled shell command line (rather than being passed as an empty argument), collapsing `--distance` and the following `--gun-time` flag together and breaking argument parsing. Same fix — the option's value is now `" "` too.
+
 ## [0.2.0] - 2026-07-12
 
 ### Added

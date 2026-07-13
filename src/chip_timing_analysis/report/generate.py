@@ -144,14 +144,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Bib to remove from the participant universe entirely (e.g. data-entry error). Repeatable.",
     )
     args = parser.parse_args(argv)
-    # Blank strings (e.g. an unfilled VS Code task input, which passes ""
-    # rather than omitting the flag) mean "not provided" here, not a literal
-    # empty value -- gun_time="" would fail pd.Timestamp(), and a blank note
-    # would show up as an empty bullet in the reports. race_name/race_date/
-    # distance similarly fall through to build_race_report()'s own
+    # Blank/whitespace-only strings (e.g. an unfilled VS Code task input,
+    # which passes "" or -- for these optional fields -- a literal single
+    # space, see .vscode/tasks.json's comment on why a bare "" default isn't
+    # used -- rather than omitting the flag) mean "not provided" here, not a
+    # literal value -- gun_time=" " would fail pd.Timestamp(), and a blank
+    # note would show up as an empty bullet in the reports. race_name/
+    # race_date/distance similarly fall through to build_race_report()'s own
     # None-means-derive-from-the-RDS-export handling.
     for attr in ("race_name", "race_date", "distance", "gun_time"):
-        if getattr(args, attr) == "":
+        val = getattr(args, attr)
+        if val is not None and val.strip() == "":
             setattr(args, attr, None)
     args.notes = [n for n in args.notes if n.strip()]
     args.detail_notes = [n for n in args.detail_notes if n.strip()]

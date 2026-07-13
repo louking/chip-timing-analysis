@@ -9,21 +9,21 @@
         {
             "id": "raceName",
             "type": "promptString",
-            "description": "Race name -- leave blank to derive from the RDS export zip, if race_dir has one",
-            "default": ""
+            "description": "Race name -- leave as-is (single space) to derive from the RDS export zip, if race_dir has one",
+            "default": " "
         },
         {
             "id": "raceDate",
             "type": "promptString",
-            "description": "Race date, YYYY-MM-DD -- leave blank to derive from the RDS export zip's gun time",
-            "default": ""
+            "description": "Race date, YYYY-MM-DD -- leave as-is (single space) to derive from the RDS export zip's gun time",
+            "default": " "
         },
         {
             "id": "distance",
             "type": "pickString",
             "description": "Race distance (Gap Factor lookup key) -- pick auto-detect if race_dir has an RDS export zip",
             "options": [
-                { "label": "(auto-detect from RDS export)", "value": "" },
+                { "label": "(auto-detect from RDS export)", "value": " " },
                 "5K",
                 "10K",
                 "10M"
@@ -33,14 +33,14 @@
         {
             "id": "gunTime",
             "type": "promptString",
-            "description": "Gun time, e.g. 2026-07-04 08:30:02 -- leave blank if race_dir has an RDS export zip",
-            "default": ""
+            "description": "Gun time, e.g. 2026-07-04 08:30:02 -- leave as-is (single space) if race_dir has an RDS export zip",
+            "default": " "
         },
         {
             "id": "note",
             "type": "promptString",
-            "description": "Optional bib/name-free note about an unusual occurrence (leave blank for none)",
-            "default": ""
+            "description": "Optional bib/name-free note about an unusual occurrence -- leave as-is (single space) for none",
+            "default": " "
         },
         {
             "id": "publishRaceDate",
