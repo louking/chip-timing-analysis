@@ -95,6 +95,25 @@
                 "reveal": "always",
                 "panel": "new"
             }
+        },
+        {
+            "label": "Chip Timing: Publish New Reports to fsrc-tech",
+            "detail": "Copies every reports/<date>.md not yet present in the fsrc-tech checkout, plus SUMMARY.md. Does not commit/push there -- see the task's own printed reminder.",
+            "type": "shell",
+            "command": ".venv/Scripts/python.exe",
+            "args": [
+                "-m", "chip_timing_analysis.report.publish",
+                "--new",
+                "${input:fsrcTechDir}"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            }
         }
     ]
 }

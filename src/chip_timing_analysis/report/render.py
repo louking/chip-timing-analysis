@@ -451,10 +451,13 @@ def append_summary_row(report: RaceReport, summary_path: str | Path) -> None:
     chronological order (e.g. re-running an earlier race's report after a
     later one has already been added). Re-generating the same race replaces
     its existing row in place rather than appending a duplicate. Creates the
-    file (with header) if it doesn't exist yet. Also (re)writes the linked
-    column-legend file alongside it (see render_summary_legend()) so it's
-    always present and in sync, even on a re-run that doesn't otherwise
-    touch SUMMARY.md's header."""
+    file (with header) if it doesn't exist yet, and always rewrites the
+    header from the current _SUMMARY_HEADER constant on every call (not
+    read from the existing file) so a header/column-label change in code
+    propagates on the next race generated, rather than being stuck until
+    someone edits the file by hand. Also (re)writes the linked column-legend
+    file alongside it (see render_summary_legend()) so it's always present
+    and in sync."""
     summary_path = Path(summary_path)
     row = render_summary_row(report) + "\n"
 
@@ -467,11 +470,10 @@ def append_summary_row(report: RaceReport, summary_path: str | Path) -> None:
 
     lines = summary_path.read_text(encoding="utf-8").splitlines(keepends=True)
     separator_idx = next(i for i, line in enumerate(lines) if line.startswith("|---"))
-    header_lines = lines[: separator_idx + 1]
     existing_rows = [
         line for line in lines[separator_idx + 1 :]
         if _SUMMARY_DATE_RE.match(line) and _SUMMARY_DATE_RE.match(line).group(1) != report.race_date
     ]
     all_rows = existing_rows + [row]
     all_rows.sort(key=lambda line: _SUMMARY_DATE_RE.match(line).group(1), reverse=True)
-    summary_path.write_text("".join(header_lines + all_rows), encoding="utf-8")
+    summary_path.write_text(_SUMMARY_HEADER + "".join(all_rows), encoding="utf-8")
