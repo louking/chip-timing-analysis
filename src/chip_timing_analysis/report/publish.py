@@ -13,10 +13,13 @@ Example:
     python -m chip_timing_analysis.report.publish 2026-07-04 "../../fsrc-tech/fsrc-tech"
 
 Copies:
-    reports/<race_date>.md -> <fsrc_tech_dir>/docs/race-services/reports/<race_date>.md
-    reports/SUMMARY.md     -> <fsrc_tech_dir>/docs/race-services/reports/README.md
-                               (overwrite -- SUMMARY.md already accumulates every
-                               race, so this fully replaces the fsrc-tech index)
+    reports/<race_date>.md    -> <fsrc_tech_dir>/docs/race-services/reports/<race_date>.md
+    reports/SUMMARY.md        -> <fsrc_tech_dir>/docs/race-services/reports/README.md
+                                  (overwrite -- SUMMARY.md already accumulates every
+                                  race, so this fully replaces the fsrc-tech index)
+    reports/SUMMARY-LEGEND.md -> <fsrc_tech_dir>/docs/race-services/reports/SUMMARY-LEGEND.md
+                                  (overwrite -- kept under the same filename so
+                                  README.md's link to it still resolves)
 """
 
 from __future__ import annotations
@@ -36,6 +39,9 @@ def publish(race_date: str, fsrc_tech_dir: str, reports_dir: str = "reports") ->
     src_summary = reports_dir_path / "SUMMARY.md"
     if not src_summary.exists():
         raise FileNotFoundError(f"{src_summary} not found")
+    src_legend = reports_dir_path / "SUMMARY-LEGEND.md"
+    if not src_legend.exists():
+        raise FileNotFoundError(f"{src_legend} not found")
 
     dest_dir = Path(fsrc_tech_dir) / "docs" / "race-services" / "reports"
     if not dest_dir.is_dir():
@@ -50,6 +56,10 @@ def publish(race_date: str, fsrc_tech_dir: str, reports_dir: str = "reports") ->
     dest_summary = dest_dir / "README.md"
     shutil.copyfile(src_summary, dest_summary)
     print(f"copied {src_summary} -> {dest_summary} (overwritten)")
+
+    dest_legend = dest_dir / "SUMMARY-LEGEND.md"
+    shutil.copyfile(src_legend, dest_legend)
+    print(f"copied {src_legend} -> {dest_legend} (overwritten)")
 
     print()
     print("Remaining manual steps (per CLAUDE.md), not done by this script:")

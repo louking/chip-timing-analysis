@@ -128,6 +128,22 @@ def gun_time(export: RdgoExport) -> pd.Timestamp:
     return _to_local_ts(export.scored_events[0]["actual_start_ts"], tz)
 
 
+def n_registered(export: RdgoExport) -> int:
+    """Count of registrants in this race's own scored event(s) -- entity_map
+    covers every registrant under the race umbrella (e.g. a companion
+    division sharing the same export), so this is restricted the same way
+    bib_chip()/known_drops() are (via _in_scored_event()). Distinct from
+    build.py's n_participants, which is our own data-confirmed count of who
+    actually showed up and ran (had a tm-data.csv row or a chip read) --
+    n_registered counts everyone who signed up, whether or not they started."""
+    count = 0
+    for e in export.entity_map:
+        p = e["entity"]["Participant"]["fields"]
+        if p.get("bib_num") is not None and _in_scored_event(export, p):
+            count += 1
+    return count
+
+
 def bib_gap_factors(export: RdgoExport) -> dict[int, pd.Timedelta]:
     """bib -> that bib's own scored_event's Gap Factor (min_finish_time), not
     a single race-wide value -- a combined multi-distance race (e.g. Wild

@@ -23,6 +23,15 @@ def _fmt_ts(ts) -> str:
     return ts.strftime("%Y-%m-%d %H:%M:%S") + f".{ts.microsecond // 10000:02d}"
 
 
+def _fmt_time(ts) -> str:
+    """Time-of-day only, hundredths precision -- like _fmt_ts but without the
+    date, for display alongside a race date already shown separately (e.g.
+    gun time in the Overview line)."""
+    if pd.isna(ts):
+        return ""
+    return ts.strftime("%H:%M:%S") + f".{ts.microsecond // 10000:02d}"
+
+
 _MISSED_READ_CAVEAT = (
     "If missed reads cluster in time or on specific mats, that points to a systemic "
     "equipment issue (e.g. antenna positioning) rather than isolated incidents (e.g. a "
@@ -209,7 +218,7 @@ def render_detailed_report(report: RaceReport) -> str:
     r = report
     lines = [
         f"# {r.race_name} — Detailed Timing Report",
-        f"_Race date: {r.race_date} | Distance: {r.distance} | Gun time: {r.gun_time}_",
+        f"_Race date: {r.race_date} | Distance: {r.distance} | Gun time: {_fmt_time(r.gun_time)}_",
         "",
         "## Overview",
         f"- Bib/chip assignments printed: {r.n_bib_chip_entries}",
@@ -390,21 +399,40 @@ def render_summary_row(report: RaceReport) -> str:
     )
 
 
+_SUMMARY_LEGEND_FILENAME = "SUMMARY-LEGEND.md"
+
 _SUMMARY_HEADER = (
     "# Timing Summary\n\n"
-    "One row per race analyzed, most recent first. \"Chips Not Read at Finish\" = zero-reads + "
-    "missed-finish-only bibs (our own computed count). \"% Missed\" = share of all chip read "
-    "opportunities (start + finish) that went unread. \"Peak (60s)\" matches the finish-line-timing "
-    "field's standard runners-per-minute convention; \"Peak (15s)\" is a shorter burst window that "
-    "catches short clusters a 60s window can smooth over -- more typical of FSRC's small-field "
-    "races. Notes are kept short here (full detail is on the linked per-race report); a no-chip-"
-    "assigned count only appears here when a race actually had one (rare process problem, not a "
-    "permanent column). See the per-race sanitized report for the recovered-vs-unrecovered "
-    "backup-timing breakdown.\n\n"
+    f"One row per race analyzed, most recent first. See the [column legend]({_SUMMARY_LEGEND_FILENAME}) "
+    "for what each column means.\n\n"
     "| Date | Distance | Participants | Zero Reads | Missed Start | Chips Not Read at Finish | "
     "% Missed | Peak (60s) | Peak (15s) | Notes |\n"
     "|---|---|---|---|---|---|---|---|---|---|\n"
 )
+
+
+def render_summary_legend() -> str:
+    """The explanatory text formerly embedded as one dense paragraph atop
+    SUMMARY.md -- moved to its own linked page (per Lou's call) so the
+    summary table itself isn't preceded by a wall of text. Written alongside
+    SUMMARY.md by append_summary_row() so it's always present and in sync,
+    even though its content doesn't depend on any particular race."""
+    return (
+        "# Timing Summary — Column Legend\n\n"
+        "- **Chips Not Read at Finish** — zero-reads + missed-finish-only bibs "
+        "(our own computed count).\n"
+        "- **% Missed** — share of all chip read opportunities (start + finish) "
+        "that went unread.\n"
+        "- **Peak (60s)** — matches the finish-line-timing field's standard "
+        "runners-per-minute convention.\n"
+        "- **Peak (15s)** — a shorter burst window that catches short clusters "
+        "a 60s window can smooth over — more typical of FSRC's small-field races.\n"
+        "- **Notes** — kept short here (full detail is on the linked per-race "
+        "report); a no-chip-assigned count only appears here when a race "
+        "actually had one (rare process problem, not a permanent column).\n\n"
+        "See the per-race sanitized report for the recovered-vs-unrecovered "
+        "backup-timing breakdown.\n"
+    )
 
 
 _SUMMARY_DATE_RE = re.compile(r"^\| \[(\d{4}-\d{2}-\d{2})\]")
@@ -418,12 +446,17 @@ def append_summary_row(report: RaceReport, summary_path: str | Path) -> None:
     chronological order (e.g. re-running an earlier race's report after a
     later one has already been added). Re-generating the same race replaces
     its existing row in place rather than appending a duplicate. Creates the
-    file (with header) if it doesn't exist yet."""
+    file (with header) if it doesn't exist yet. Also (re)writes the linked
+    column-legend file alongside it (see render_summary_legend()) so it's
+    always present and in sync, even on a re-run that doesn't otherwise
+    touch SUMMARY.md's header."""
     summary_path = Path(summary_path)
     row = render_summary_row(report) + "\n"
 
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    (summary_path.parent / _SUMMARY_LEGEND_FILENAME).write_text(render_summary_legend(), encoding="utf-8")
+
     if not summary_path.exists():
-        summary_path.parent.mkdir(parents=True, exist_ok=True)
         summary_path.write_text(_SUMMARY_HEADER + row, encoding="utf-8")
         return
 

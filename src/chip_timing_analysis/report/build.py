@@ -41,11 +41,15 @@ class RaceReport:
     n_bib_chip_entries: int  # bib-chip.csv row count -- the print-run/assignment sheet size, NOT registrants
     n_participants: int  # our own confirmed-participant count: union of tm-data.csv bibs and any bib with a chip read
 
-    # Authoritative counts from RDS's own official results, if Lou supplies them --
-    # we have no parser/data source for these (no registration-system export yet),
-    # and they can differ from n_participants (e.g. Indy: n_participants=111 by our
-    # data, but official was 110 starters/109 finishers -- reconciling the exact gap
-    # requires RDS's own participant list, which we don't have).
+    # Authoritative counts from RDS's own official results. n_registered is
+    # auto-derived from the RDS export's entity_map (rdgo_export.n_registered())
+    # when a zip is present and no explicit value is passed -- it's a count RDS
+    # already has, distinct from n_participants (who our own data confirms
+    # actually showed up/ran). n_starters/n_finishers have no data source in
+    # this repo (no registration-system export) so stay manual overrides only.
+    # All three can differ from n_participants (e.g. Indy: n_participants=111
+    # by our data, but official was 110 starters/109 finishers -- reconciling
+    # the exact gap requires RDS's own participant list, which we don't have).
     n_registered: int | None = None
     n_starters: int | None = None
     n_finishers: int | None = None
@@ -267,6 +271,11 @@ def build_race_report(
 
     n_registered/n_starters/n_finishers are optional authoritative overrides
     from RDS's own results -- see RaceReport docstring for why they're manual.
+    n_registered specifically is auto-derived from the RDS export's own
+    entity_map (rdgo_export.n_registered()) when using the zip path and not
+    passed explicitly -- registration counts are recorded in RDS itself, so
+    they don't need a human to supply them the way n_starters/n_finishers
+    still do (no local data source has that). Pass it explicitly to override.
     notes must stay bib/name-free (shown everywhere); detail_notes can name
     bibs/individuals (shown only in the private detailed report). known_drops
     are bibs confirmed as a legitimate DNF, so the report doesn't flag them
@@ -308,6 +317,8 @@ def build_race_report(
         classified_all_raw = rdgo_export.classify_start_finish(rdgo)
         known_drops |= set(rdgo_export.known_drops(rdgo))
         n_bib_chip_entries = len(bib_chip)
+        if n_registered is None:
+            n_registered = rdgo_export.n_registered(rdgo)
 
         # tm_data/backup are derived from the *unrestricted* classification --
         # a no-chip bib's backup-sourced finish still needs to show up here
