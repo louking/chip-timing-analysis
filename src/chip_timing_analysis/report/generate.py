@@ -8,8 +8,8 @@ Usage:
         [--gun-time "YYYY-MM-DD HH:MM:SS"] \\
         [--note TEXT ...] [--detail-note TEXT ...] \\
         [--n-registered N] [--n-starters N] [--n-finishers N] \\
-        [--known-drop BIB ...] [--exclude-bib BIB ...] \\
-        [--reports-dir DIR]
+        [--known-drop BIB[,BIB...] ...] [--exclude-bib BIB[,BIB...] ...] \\
+        [--reports-dir DIR] [--from-last-run]
 
 --race-name/--race-date/--distance/--gun-time are only required when race_dir
 has no RDS full-database-export zip (see CLAUDE.md / parsers/rdgo_export.py)
@@ -25,11 +25,20 @@ bib/name-free. Repeat --note for multiple. --detail-note can name specific
 bibs/individuals and is shown ONLY in the private detailed report (repeat
 for multiple).
 
---known-drop / --exclude-bib take a single bib number each and may be
-repeated for multiple bibs. See RaceReport/build_race_report() docstrings
-for the distinction: a known drop started but didn't finish (real DNF); an
-excluded bib is removed from the participant universe entirely (e.g. a
-chip cross-reference that was a data-entry error, never really issued).
+--known-drop / --exclude-bib each take a bib number, or a comma/space-
+separated list of bibs in one flag (e.g. --known-drop "267,303,333") --
+and may also be repeated for multiple bibs/groups. See RaceReport/
+build_race_report() docstrings for the distinction: a known drop started
+but didn't finish (real DNF); an excluded bib is removed from the
+participant universe entirely (e.g. a chip cross-reference that was a
+data-entry error, never really issued).
+
+--from-last-run replays race_name/race_date/distance/gun_time/notes/
+detail_notes/n_registered/n_starters/n_finishers/known_drops/exclude_bibs
+saved from this race_dir's last successful run (see .generate-args.json,
+written there after every run) -- any of those flags also passed alongside
+--from-last-run are ignored. Useful for re-running a race after a
+software update, without having to retype every override by hand.
 
 Example (zip present -- race_name/race_date/distance/gun_time all derived):
     python -m chip_timing_analysis.report.generate "data/2026-05-25-panda-5k" \\
@@ -53,10 +62,34 @@ Writes:
 from __future__ import annotations
 
 import argparse
+import json
+import re
 from pathlib import Path
 
 from chip_timing_analysis.report.build import build_race_report
 from chip_timing_analysis.report.render import render_detailed_report, render_sanitized_report, append_summary_row
+from chip_timing_analysis.wslpath import to_wsl_path
+
+# Sidecar written next to report.md in race_dir after every successful run,
+# recording the options used -- lets --from-last-run replay them verbatim
+# (e.g. after a software update) without retyping known_drops/exclude_bibs/etc.
+_ARGS_SIDECAR_NAME = ".generate-args.json"
+
+
+def _save_args_sidecar(race_dir_path: Path, **kwargs) -> None:
+    (race_dir_path / _ARGS_SIDECAR_NAME).write_text(
+        json.dumps(kwargs, indent=2) + "\n", encoding="utf-8",
+    )
+
+
+def _load_args_sidecar(race_dir_path: Path) -> dict:
+    path = race_dir_path / _ARGS_SIDECAR_NAME
+    if not path.exists():
+        raise FileNotFoundError(
+            f"{path} not found -- this race has no prior successful generate() run to replay "
+            "(--from-last-run needs one)"
+        )
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def generate(
@@ -73,8 +106,22 @@ def generate(
     n_finishers: int | None = None,
     known_drops: list[int] | None = None,
     exclude_bibs: list[int] | None = None,
+    from_last_run: bool = False,
 ) -> None:
-    race_dir_path = Path(race_dir)
+    race_dir_path = Path(to_wsl_path(race_dir))
+
+    if from_last_run:
+        saved = _load_args_sidecar(race_dir_path)
+        print(f"replaying options saved from a prior run ({_ARGS_SIDECAR_NAME}): {saved}")
+        race_name, race_date, distance, gun_time = (
+            saved["race_name"], saved["race_date"], saved["distance"], saved["gun_time"]
+        )
+        notes, detail_notes = saved["notes"], saved["detail_notes"]
+        n_registered, n_starters, n_finishers = (
+            saved["n_registered"], saved["n_starters"], saved["n_finishers"]
+        )
+        known_drops, exclude_bibs = saved["known_drops"], saved["exclude_bibs"]
+
     report = build_race_report(
         race_dir_path, race_name, race_date, distance, gun_time,
         notes=notes, detail_notes=detail_notes,
@@ -100,6 +147,23 @@ def generate(
     summary_path = reports_dir_path / "SUMMARY.md"
     append_summary_row(report, summary_path)
     print(f"appended row to {summary_path}")
+
+    _save_args_sidecar(
+        race_dir_path,
+        race_name=race_name, race_date=race_date, distance=distance,
+        gun_time=str(gun_time) if gun_time is not None else None,
+        notes=notes or [], detail_notes=detail_notes or [],
+        n_registered=n_registered, n_starters=n_starters, n_finishers=n_finishers,
+        known_drops=known_drops or [], exclude_bibs=exclude_bibs or [],
+    )
+
+
+def _parse_bib_list(value: str) -> list[int]:
+    """Parses one --known-drop/--exclude-bib occurrence, which may be a
+    single bib or a comma/space-separated list (e.g. "267,303,333") -- lets
+    one VS Code task prompt supply a whole group in a single flag.
+    """
+    return [int(tok) for tok in re.split(r"[,\s]+", value.strip()) if tok]
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -136,12 +200,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--n-starters", type=int, default=None)
     parser.add_argument("--n-finishers", type=int, default=None)
     parser.add_argument(
-        "--known-drop", dest="known_drops", type=int, action="append", default=[],
-        help="Bib confirmed as a legitimate DNF (started, didn't finish). Repeatable.",
+        "--known-drop", dest="known_drops", type=_parse_bib_list, action="append", default=[],
+        help="Bib(s) confirmed as a legitimate DNF (started, didn't finish) -- a single bib, or a "
+             "comma/space-separated list in one flag. Repeatable.",
     )
     parser.add_argument(
-        "--exclude-bib", dest="exclude_bibs", type=int, action="append", default=[],
-        help="Bib to remove from the participant universe entirely (e.g. data-entry error). Repeatable.",
+        "--exclude-bib", dest="exclude_bibs", type=_parse_bib_list, action="append", default=[],
+        help="Bib(s) to remove from the participant universe entirely (e.g. data-entry error) -- a "
+             "single bib, or a comma/space-separated list in one flag. Repeatable.",
+    )
+    parser.add_argument(
+        "--from-last-run", action="store_true",
+        help="Replay options saved from this race_dir's last successful run instead of the flags above "
+             "(see .generate-args.json in race_dir).",
     )
     args = parser.parse_args(argv)
     # Blank/whitespace-only strings (e.g. an unfilled VS Code task input,
@@ -158,6 +229,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             setattr(args, attr, None)
     args.notes = [n for n in args.notes if n.strip()]
     args.detail_notes = [n for n in args.detail_notes if n.strip()]
+    # each --known-drop/--exclude-bib occurrence parses to a list (possibly
+    # empty, for a blank VS Code task input) -- flatten to one list of bibs.
+    args.known_drops = [bib for group in args.known_drops for bib in group]
+    args.exclude_bibs = [bib for group in args.exclude_bibs for bib in group]
     return args
 
 
@@ -174,4 +249,5 @@ if __name__ == "__main__":
         n_finishers=args.n_finishers,
         known_drops=args.known_drops,
         exclude_bibs=args.exclude_bibs,
+        from_last_run=args.from_last_run,
     )

@@ -34,6 +34,8 @@ import argparse
 import shutil
 from pathlib import Path
 
+from chip_timing_analysis.wslpath import to_wsl_path
+
 _NON_RACE_STEMS = {"SUMMARY", "SUMMARY-LEGEND"}
 
 
@@ -70,7 +72,7 @@ def publish(
     if not src_legend.exists():
         raise FileNotFoundError(f"{src_legend} not found")
 
-    dest_dir = Path(fsrc_tech_dir) / "docs" / "race-services" / "reports"
+    dest_dir = Path(to_wsl_path(fsrc_tech_dir)) / "docs" / "race-services" / "reports"
     if not dest_dir.is_dir():
         raise FileNotFoundError(
             f"{dest_dir} not found -- is fsrc_tech_dir ({fsrc_tech_dir}) a valid fsrc-tech checkout?"

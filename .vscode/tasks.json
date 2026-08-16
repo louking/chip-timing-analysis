@@ -43,6 +43,18 @@
             "default": " "
         },
         {
+            "id": "knownDrops",
+            "type": "promptString",
+            "description": "Bib(s) confirmed as a legitimate DNF (started, didn't finish), comma/space-separated -- leave as-is (single space) for none",
+            "default": " "
+        },
+        {
+            "id": "excludeBibs",
+            "type": "promptString",
+            "description": "Bib(s) to exclude entirely, e.g. a data-entry error (comma/space-separated) -- leave as-is (single space) for none",
+            "default": " "
+        },
+        {
             "id": "publishRaceDate",
             "type": "promptString",
             "description": "Race date to publish, YYYY-MM-DD -- must match an existing reports/<date>.md"
@@ -58,7 +70,7 @@
         {
             "label": "Chip Timing: Generate Race Report",
             "type": "shell",
-            "command": ".venv/Scripts/python.exe",
+            "command": ".venv/bin/python",
             "args": [
                 "-m", "chip_timing_analysis.report.generate",
                 "${input:raceDir}",
@@ -66,7 +78,28 @@
                 "--race-date", "${input:raceDate}",
                 "--distance", "${input:distance}",
                 "--gun-time", "${input:gunTime}",
-                "--note", "${input:note}"
+                "--note", "${input:note}",
+                "--known-drop", "${input:knownDrops}",
+                "--exclude-bib", "${input:excludeBibs}"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            }
+        },
+        {
+            "label": "Chip Timing: Regenerate Race Report (same options)",
+            "detail": "Re-runs generate.py for race_dir using the options saved from its last successful run (.generate-args.json) -- use after a software update to reproduce a race's report without retyping every override.",
+            "type": "shell",
+            "command": ".venv/bin/python",
+            "args": [
+                "-m", "chip_timing_analysis.report.generate",
+                "${input:raceDir}",
+                "--from-last-run"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
@@ -81,7 +114,7 @@
             "label": "Chip Timing: Publish Report to fsrc-tech",
             "detail": "Copies reports/<date>.md and SUMMARY.md into a local fsrc-tech checkout. Does not commit/push there -- see the task's own printed reminder.",
             "type": "shell",
-            "command": ".venv/Scripts/python.exe",
+            "command": ".venv/bin/python",
             "args": [
                 "-m", "chip_timing_analysis.report.publish",
                 "${input:publishRaceDate}",
@@ -100,7 +133,7 @@
             "label": "Chip Timing: Publish New Reports to fsrc-tech",
             "detail": "Copies every reports/<date>.md not yet present in the fsrc-tech checkout, plus SUMMARY.md. Does not commit/push there -- see the task's own printed reminder.",
             "type": "shell",
-            "command": ".venv/Scripts/python.exe",
+            "command": ".venv/bin/python",
             "args": [
                 "-m", "chip_timing_analysis.report.publish",
                 "--new",

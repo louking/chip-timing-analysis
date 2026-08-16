@@ -9,6 +9,12 @@ the source of truth — bump it by hand and tag the commit `vX.Y.Z`).
 
 ### Added
 - `test/` — a full pytest suite (205 tests, ~2700 lines), matching `members`' test-suite style/density at Lou's request: one `test_<module>.py` per source module, small focused tests grouped by section comments, `test/factories.py` for shared builders (raw Trident line strings, a minimal `RdgoExport`). Pure unit tests against small hand-built DataFrames/dicts/temp files; deliberately no integration test of `build_race_report()` itself (see CLAUDE.md's "Project setup" for why). Added `pytest==9.1.1` to `requirements.txt` (matching the version `members` pins).
+- `wslpath.to_wsl_path()`: converts a Windows-style path (`C:\...` or `C:/...`) to its WSL-mounted form (`/mnt/c/...`) via `wslpath -u`, so `race_dir`/`fsrc_tech_dir` can be pasted straight from Explorer/Dropbox into a VS Code task prompt without manual translation. Wired into `report/generate.py` and `report/publish.py`.
+- `--known-drop`/`--exclude-bib` now also accept a comma/space-separated list of bibs in a single flag occurrence (e.g. `--known-drop "267,303,333"`), in addition to still being repeatable. Two new VS Code task prompts (Known Drops, Exclude Bibs) on "Chip Timing: Generate Race Report" expose this.
+- `.generate-args.json`: a sidecar written next to `report.md` in `race_dir` after every successful `generate()` run, recording every option used. `generate(..., from_last_run=True)` / CLI `--from-last-run` replays it verbatim, so a race can be re-run after a software update without retyping overrides. New "Chip Timing: Regenerate Race Report (same options)" VS Code task wraps it, prompting only for `race_dir`.
+
+### Fixed
+- `.vscode/tasks.json`'s three Python-invoking tasks called `.venv/Scripts/python.exe` (the Windows venv layout) but now run through WSL bash, which needs `.venv/bin/python` — was failing with exit 127 on every run since the move to WSL.
 
 ## [0.3.0] - 2026-07-13
 
