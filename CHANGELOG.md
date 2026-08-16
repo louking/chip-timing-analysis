@@ -7,6 +7,9 @@ the source of truth — bump it by hand and tag the commit `vX.Y.Z`).
 
 ## [Unreleased]
 
+### Added
+- `test/` — a full pytest suite (205 tests, ~2700 lines), matching `members`' test-suite style/density at Lou's request: one `test_<module>.py` per source module, small focused tests grouped by section comments, `test/factories.py` for shared builders (raw Trident line strings, a minimal `RdgoExport`). Pure unit tests against small hand-built DataFrames/dicts/temp files; deliberately no integration test of `build_race_report()` itself (see CLAUDE.md's "Project setup" for why). Added `pytest==9.1.1` to `requirements.txt` (matching the version `members` pins).
+
 ## [0.3.0] - 2026-07-13
 
 ### Added
