@@ -15,6 +15,10 @@ the source of truth — bump it by hand and tag the commit `vX.Y.Z`).
 
 ### Fixed
 - `.vscode/tasks.json`'s three Python-invoking tasks called `.venv/Scripts/python.exe` (the Windows venv layout) but now run through WSL bash, which needs `.venv/bin/python` — was failing with exit 127 on every run since the move to WSL.
+- Indy 5000's finish-line density numbers (`reports/2026-07-04.md`, `SUMMARY.md`) were generated from this repo's CSV-only local `data/` copy. Its real source directory (Dropbox) also has the RDS zip export, and generating from that instead reproduces every other number exactly but gives a different finish density (peak 60s window 9→11, peak 15s burst 5→7) -- the zip/rdgo path and the CSV path disagree specifically on finish-density timestamps, not investigated further yet. Republished with the zip-derived numbers per Lou's call, since the real source directory is the one that'll actually be used going forward.
+
+### Changed
+- `.generate-args.json` sidecars (added above) belong in a race's real source directory, not this repo's local `data/<date>-<slug>/` copies -- those are throwaway mirrors, not what `race_dir` normally points at for an existing race. Backfilled sidecars into the actual source directories (Dropbox `past races/<race>`) for all five previously-published races and removed the incorrectly-placed ones from `data/`.
 
 ## [0.3.0] - 2026-07-13
 
