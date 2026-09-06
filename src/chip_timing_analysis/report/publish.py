@@ -21,8 +21,10 @@ Copies:
                                   the source -- i.e. edited since it was last published --
                                   instead of a single race_date)
     reports/SUMMARY.md        -> <fsrc_tech_dir>/docs/race-services/reports/README.md
-                                  (overwrite -- SUMMARY.md already accumulates every
-                                  race, so this fully replaces the fsrc-tech index)
+                                  (structured merge, not a raw overwrite -- README.md
+                                  carries a hand-maintained preamble and can carry
+                                  hand-added rows for races this pipeline can't ingest;
+                                  see report/summary_merge.py's marker contract)
     reports/SUMMARY-LEGEND.md -> <fsrc_tech_dir>/docs/race-services/reports/SUMMARY-LEGEND.md
                                   (overwrite -- kept under the same filename so
                                   README.md's link to it still resolves)
@@ -34,6 +36,7 @@ import argparse
 import shutil
 from pathlib import Path
 
+from chip_timing_analysis.report.summary_merge import merge_summary_into_readme
 from chip_timing_analysis.wslpath import to_wsl_path
 
 _NON_RACE_STEMS = {"SUMMARY", "SUMMARY-LEGEND"}
@@ -98,8 +101,16 @@ def publish(
         print(f"copied {src_report} -> {dest_report}")
 
     dest_summary = dest_dir / "README.md"
-    shutil.copyfile(src_summary, dest_summary)
-    print(f"copied {src_summary} -> {dest_summary} (overwritten)")
+    existing_readme = (
+        dest_summary.read_text(encoding="utf-8") if dest_summary.exists() else None
+    )
+    merged, merge_warnings = merge_summary_into_readme(
+        src_summary.read_text(encoding="utf-8"), existing_readme
+    )
+    dest_summary.write_text(merged, encoding="utf-8")
+    print(f"merged {src_summary} -> {dest_summary}")
+    for warning in merge_warnings:
+        print(f"  warning: {warning}")
 
     dest_legend = dest_dir / "SUMMARY-LEGEND.md"
     shutil.copyfile(src_legend, dest_legend)
