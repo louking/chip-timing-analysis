@@ -99,6 +99,35 @@ def is_chip_device(export: RdgoExport, device_id: int | None) -> bool | None:
     return device.get("hardware_name") is not None
 
 
+def has_chip_timing(export: RdgoExport) -> bool:
+    """Whether this race had any chip (live antenna reader) device at all.
+    False for a race timed by Time Machine only (e.g. Pink and Blue 5K,
+    2026-10-03: one file-fed "Time Machine-FILE" device, a finish-only timing
+    location, no start location) -- build_race_report() switches to a reduced
+    report for that case, since every chip read-reliability metric is
+    meaningless without chips."""
+    return any(is_chip_device(export, device_id) for device_id in export.devices)
+
+
+def _occurrences(scored_event: dict | None) -> tuple[int | None, int]:
+    """(start_occurrence, finish_occurrence) for a scored event's reads in
+    read_data -- read from the export, not assumed. Every chip race checked
+    (Indy, Pie Run, Lewis, Wild Trail, Panda, RaceDay Mobile practice) has one
+    combined START/FINISH timing location, a `starting_point_id`, and
+    `default_segment_finish_occurrence` 2, so occurrence 1 is the start and 2
+    the finish. A race with no start location (Pink and Blue 5K: finish-only
+    "INTERMEDIATE/FINISH" location, `starting_point_id` None,
+    `default_segment_finish_occurrence` 1) has occurrence 1 as its finish and
+    no start occurrence at all. Falls back to the chip-race layout when the
+    scored event is unknown or lacks these fields."""
+    if scored_event is None:
+        return 1, 2
+    finish_occ = scored_event.get("default_segment_finish_occurrence") or 2
+    if scored_event.get("starting_point_id", 0) is None:
+        return None, finish_occ
+    return (1 if finish_occ != 1 else None), finish_occ
+
+
 def device_label(export: RdgoExport, device_id: int | None) -> str | None:
     """Human-readable device name for display (e.g. "Trident UHF8 A-DIRECT",
     "Time Machine-FILE") -- prefer this over showing a bare device_id."""
@@ -170,7 +199,10 @@ def bib_gap_factors(export: RdgoExport) -> dict[int, pd.Timedelta]:
         p = e["entity"]["Participant"]["fields"]
         bib = p.get("bib_num")
         se = _event_for_participant(export, p)
-        if bib is not None and se is not None:
+        # min_finish_time is null on a race with no chip timing (no Gap
+        # Factor is configured -- e.g. Pink and Blue 5K), so skip those bibs
+        # rather than crash; only the local-log cross-check uses this.
+        if bib is not None and se is not None and se.get("min_finish_time") is not None:
             result[bib] = pd.Timedelta(milliseconds=se["min_finish_time"])
     return result
 
@@ -282,6 +314,29 @@ def known_drops(export: RdgoExport) -> list[int]:
     return bibs
 
 
+def checked_in_no_finish(export: RdgoExport) -> list[int]:
+    """Bibs in this race's scored event(s) that were checked in but have no
+    finish in read_data. On a race without chips there's no start read, so
+    RDS can't tell "checked in, never started" from "started, didn't
+    finish" -- it sets `rdgo_dns` on both -- and known_drops()'s
+    `not rdgo_dns` filter would drop all of them. This is the most the data
+    can say for that case (Pink and Blue 5K: bibs 450/451/453/455/484, all
+    checked in, all later marked dropped by hand)."""
+    bibs = []
+    for e in export.entity_map:
+        p = e["entity"]["Participant"]["fields"]
+        bib = p.get("bib_num")
+        se = _event_for_participant(export, p)
+        if bib is None or se is None or not p.get("checked_in"):
+            continue
+        _, finish_occ = _occurrences(se)
+        sid = e["entity"]["Participant"]["scoring_entity_id"]
+        reads = export.read_data.get(str(sid), [])
+        if not any(r["occurrence"] == finish_occ for r in reads):
+            bibs.append(bib)
+    return sorted(bibs)
+
+
 def classify_start_finish(export: RdgoExport) -> pd.DataFrame:
     """Bib-level start/finish classification read directly from RDS's own
     per-read scoring decision -- no gun-time/gap-factor computation needed,
@@ -301,6 +356,11 @@ def classify_start_finish(export: RdgoExport) -> pd.DataFrame:
     at all (e.g. a registered no-show) -- callers should apply the same
     participant-universe filter build_race_report() does (has_any_read)
     before treating a bib as a real "missed" case.
+
+    Which occurrence is the start vs. the finish comes from each bib's own
+    scored event (see _occurrences()), not a fixed 1=start/2=finish: on a
+    race with no start location, occurrence 1 is the finish and start_time
+    is always NaT.
     """
     tz = export.race["integration_data"]["timezone"]
     rows = []
@@ -311,8 +371,9 @@ def classify_start_finish(export: RdgoExport) -> pd.DataFrame:
             continue
         sid = e["entity"]["Participant"]["scoring_entity_id"]
         reads = export.read_data.get(str(sid), [])
-        start = next((r for r in reads if r["occurrence"] == 1), None)
-        finish = next((r for r in reads if r["occurrence"] == 2), None)
+        start_occ, finish_occ = _occurrences(_event_for_participant(export, p))
+        start = next((r for r in reads if r["occurrence"] == start_occ), None) if start_occ is not None else None
+        finish = next((r for r in reads if r["occurrence"] == finish_occ), None)
         rows.append({
             "bib": bib,
             "start_time": _to_local_ts(start["timeshift_timestamp"], tz) if start else pd.NaT,
@@ -383,7 +444,7 @@ def sanity_check(export: RdgoExport) -> None:
     print(f"read_data entries: {len(export.read_data)}")
     print(f"gun_time: {gun_time(export)}")
     for se in export.scored_events:
-        gap = pd.Timedelta(milliseconds=se["min_finish_time"])
+        gap = pd.Timedelta(milliseconds=se["min_finish_time"]) if se.get("min_finish_time") is not None else None
         print(f"scored_event: {se.get('scored_event_name')} gap_factor={gap}")
 
 

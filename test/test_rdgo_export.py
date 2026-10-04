@@ -18,6 +18,8 @@ from chip_timing_analysis.parsers.rdgo_export import (
     known_drops,
     classify_start_finish,
     backup_time_selected,
+    has_chip_timing,
+    checked_in_no_finish,
 )
 
 from factories import make_export, make_participant, make_read
@@ -199,6 +201,16 @@ def test_bib_gap_factors_maps_bib_to_own_scored_event_gap():
     assert result[201] == pd.Timedelta(minutes=30)
 
 
+def test_bib_gap_factors_skips_scored_event_with_null_min_finish_time():
+    # a race with no chip timing has no Gap Factor configured (Pink and Blue 5K)
+    export = make_export(
+        scored_events=[_no_start_event()],
+        entity_map=[make_participant(101, scoring_entity_id=1, event_id="100")],
+    )
+
+    assert bib_gap_factors(export) == {}
+
+
 def test_bib_gap_factors_excludes_bib_with_no_bib_num():
     export = make_export(entity_map=[make_participant(None, scoring_entity_id=1, event_id="100")])
 
@@ -323,8 +335,37 @@ def test_known_drops_excludes_finishers():
 
 
 # ----------------------------------------------------------------------
+# has_chip_timing
+# ----------------------------------------------------------------------
+
+def test_has_chip_timing_true_when_any_device_has_hardware_name():
+    assert has_chip_timing(make_export()) is True
+
+
+def test_has_chip_timing_false_for_time_machine_only():
+    export = make_export(devices={2: {"device_id": 2, "hardware_name": None, "device_display_name": "Time Machine-FILE"}})
+
+    assert has_chip_timing(export) is False
+
+
+# ----------------------------------------------------------------------
 # classify_start_finish
 # ----------------------------------------------------------------------
+
+def _no_start_event(**overrides):
+    """A scored event shaped like Pink and Blue 5K's: finish-only timing
+    location, no start location, finish is occurrence 1, no Gap Factor."""
+    event = {
+        "scored_event_name": "5k Run - Timed Event",
+        "min_finish_time": None,
+        "actual_start_ts": int(GUN.value // 1_000_000),
+        "included_event_ids": ["100"],
+        "starting_point_id": None,
+        "default_segment_finish_occurrence": 1,
+    }
+    event.update(overrides)
+    return event
+
 
 def test_classify_reads_occurrence_1_and_2_from_read_data():
     export = make_export(
@@ -340,6 +381,41 @@ def test_classify_reads_occurrence_1_and_2_from_read_data():
     row = result.iloc[0]
     assert row["start_time"] == GUN + pd.Timedelta(seconds=5)
     assert row["start_device_id"] == 2
+    assert row["finish_time"] == GUN + pd.Timedelta(minutes=20)
+    assert row["finish_device_id"] == 2
+
+
+def test_classify_occurrences_follow_scored_event_settings():
+    export = make_export(
+        scored_events=[{
+            "scored_event_name": "5K", "min_finish_time": 14 * 60 * 1000,
+            "actual_start_ts": int(GUN.value // 1_000_000), "included_event_ids": ["100"],
+            "starting_point_id": 43, "default_segment_finish_occurrence": 2,
+        }],
+        entity_map=[make_participant(101, scoring_entity_id=1, event_id="100")],
+        read_data={"1": [
+            make_read(1, device_id=2, timestamp=GUN + pd.Timedelta(seconds=5)),
+            make_read(2, device_id=2, timestamp=GUN + pd.Timedelta(minutes=20)),
+        ]},
+    )
+
+    row = classify_start_finish(export).iloc[0]
+
+    assert row["start_time"] == GUN + pd.Timedelta(seconds=5)
+    assert row["finish_time"] == GUN + pd.Timedelta(minutes=20)
+
+
+def test_classify_occurrence_1_is_finish_when_event_has_no_start_location():
+    export = make_export(
+        scored_events=[_no_start_event()],
+        entity_map=[make_participant(101, scoring_entity_id=1, event_id="100")],
+        read_data={"1": [make_read(1, device_id=2, timestamp=GUN + pd.Timedelta(minutes=20))]},
+    )
+
+    row = classify_start_finish(export).iloc[0]
+
+    assert pd.isna(row["start_time"])
+    assert row["start_n_reads"] == 0
     assert row["finish_time"] == GUN + pd.Timedelta(minutes=20)
     assert row["finish_device_id"] == 2
 
@@ -418,3 +494,32 @@ def test_backup_time_selected_excludes_bibs_with_no_finish():
     result = backup_time_selected(export, classified)
 
     assert result.empty
+
+
+# ----------------------------------------------------------------------
+# checked_in_no_finish
+# ----------------------------------------------------------------------
+
+def test_checked_in_no_finish_lists_checked_in_bibs_without_a_finish():
+    export = make_export(
+        scored_events=[_no_start_event()],
+        entity_map=[
+            make_participant(101, scoring_entity_id=1, event_id="100", checked_in=True),
+            make_participant(102, scoring_entity_id=2, event_id="100", checked_in=True, rdgo_dns=True, rdgo_drop=True),
+            make_participant(103, scoring_entity_id=3, event_id="100", checked_in=False, rdgo_dns=True),
+            make_participant(104, scoring_entity_id=4, event_id="999", checked_in=True),
+        ],
+        read_data={"1": [make_read(1, device_id=2, timestamp=GUN + pd.Timedelta(minutes=20))]},
+    )
+
+    assert checked_in_no_finish(export) == [102]
+
+
+def test_checked_in_no_finish_uses_occurrence_2_on_a_chip_race():
+    # a start read alone (occurrence 1) is not a finish on a chip race
+    export = make_export(
+        entity_map=[make_participant(101, scoring_entity_id=1, event_id="100", checked_in=True)],
+        read_data={"1": [make_read(1, device_id=2, timestamp=GUN + pd.Timedelta(seconds=5))]},
+    )
+
+    assert checked_in_no_finish(export) == [101]

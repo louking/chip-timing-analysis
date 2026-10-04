@@ -51,6 +51,7 @@ def make_participant(
     rdgo_dns: bool = False,
     rdgo_dnf: bool = False,
     rdgo_drop: bool = False,
+    checked_in: bool = False,
     first_name: str = "Test",
     last_name: str = "Runner",
     gender: str = "M",
@@ -71,6 +72,7 @@ def make_participant(
                     "rdgo_dns": rdgo_dns,
                     "rdgo_dnf": rdgo_dnf,
                     "rdgo_drop": rdgo_drop,
+                    "checked_in": checked_in,
                 },
             }
         },

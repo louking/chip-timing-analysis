@@ -7,6 +7,7 @@ from chip_timing_analysis.report.summary_merge import (
     merge_summary_into_readme,
     parse_row,
     render_overall,
+    is_no_chip_row,
 )
 
 _HEADER = (
@@ -308,3 +309,32 @@ def test_merge_output_ends_with_single_newline():
 
     assert merged.endswith("\n")
     assert not merged.endswith("\n\n")
+
+
+# ----------------------------------------------------------------------
+# rows for races with no chip timing
+# ----------------------------------------------------------------------
+
+_NO_CHIP_ROW = "| [2026-10-03](2026-10-03.md) | 5K | 77 | n/a | n/a | n/a | n/a | 8 | 4 | Not chip timed |"
+
+
+def test_is_no_chip_row_true_for_all_na_chip_cells():
+    assert is_no_chip_row(_NO_CHIP_ROW)
+
+
+def test_is_no_chip_row_false_for_numeric_row():
+    assert not is_no_chip_row(_row("2026-07-04"))
+
+
+def test_merge_excludes_no_chip_row_from_overall_without_warning():
+    preamble = (
+        "# Timing Summary\n\n"
+        f"{MARKER_OVERALL_START}\n\n- old\n\n{MARKER_OVERALL_END}\n"
+    )
+    src = _src(_NO_CHIP_ROW, _row("2026-07-04", participants=100, start=0, finish=2, pct="1.0%"))
+
+    merged, warnings = merge_summary_into_readme(src, _dest(preamble))
+
+    assert _NO_CHIP_ROW in merged
+    assert "- **100 timed participants** over 1 race." in merged
+    assert warnings == []

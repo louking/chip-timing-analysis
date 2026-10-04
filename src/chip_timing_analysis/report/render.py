@@ -214,6 +214,72 @@ def _render_field_counts(report: RaceReport) -> list[str]:
     return lines
 
 
+_NO_CHIP_TIMING_LINE = (
+    "- Not chip timed: finish times come from the Time Machine (manual button press at the "
+    "finish) only, so chip read-reliability metrics don't apply to this race."
+)
+
+
+def _render_no_chip_overview(report: RaceReport, include_bibs: bool) -> list[str]:
+    """Overview lines specific to a race with no chip timing (see
+    RaceReport.chip_timed) -- shared by detailed/sanitized, same reason as
+    _render_read_reliability."""
+    r = report
+    lines = [_NO_CHIP_TIMING_LINE]
+    n = len(r.checked_in_no_finish)
+    if n:
+        bibs = f" ({', '.join(str(b) for b in r.checked_in_no_finish)})" if include_bibs else ""
+        lines.append(
+            f"- {n} participant(s) checked in but have no finish time{bibs}. Without start reads, "
+            f"a did-not-start can't be told apart from a did-not-finish."
+        )
+    return lines
+
+
+def _render_queue_lag(report: RaceReport) -> list[str]:
+    r = report
+    lines = ["", "## Finish-to-Bib-Scan Queue Lag"]
+    if r.lag is None:
+        lines.append("No barcode-scanner.log available for this race.")
+        return lines
+    if r.scanner_clock_offset is not None:
+        lines.append(
+            f"- Scan times shifted by {r.scanner_clock_offset.total_seconds():+.2f}s onto the finish-time "
+            f"clock (offset derived from tm-reader.log)."
+        )
+    matched = r.lag.dropna(subset=["scan_time"])
+    if matched.empty:
+        lines.append(f"- No barcode scan matched any of the {len(r.lag)} finishers, so lag is not reported.")
+        return lines
+    if len(matched) < len(r.lag) / 2:
+        # Fallback when there's no tm-reader.log to correct the clocks with
+        # (see scanner_clock_offset()). Found on Pink and Blue 5K
+        # (2026-10-03) before that correction existed: the two laptops' clocks
+        # were ~26s apart, so nearly every scan fell *before* its finish.
+        lines.append(
+            f"- Only {len(matched)} of {len(r.lag)} finishers have a scan at or after their finish time. "
+            f"This usually means the finish times and the scanner log are on different clocks, "
+            f"so lag is not reported."
+        )
+        return lines
+    lines += [
+        f"- Finishers with a matched scan: {len(matched)} of {len(r.lag)}",
+        f"- Raw lag (sec): median {matched['lag_sec'].median():.2f}, "
+        f"90th pct {matched['lag_sec'].quantile(0.90):.2f}, "
+        f"range {matched['lag_sec'].min():.2f}-{matched['lag_sec'].max():.2f}",
+        f"- Excess lag over baseline (sec): median {matched['excess_lag_sec'].median():.2f}, "
+        f"90th pct {matched['excess_lag_sec'].quantile(0.90):.2f}",
+    ]
+    corr = matched["excess_lag_sec"].corr(matched["finishers_in_prior_window"])
+    verdict = "no evidence of a sustained queue" if abs(corr) < 0.2 else "excess lag tracks finisher density -- a queue likely formed"
+    lines.append(f"- Excess lag vs. local finisher density correlation: {corr:.3f} ({verdict})")
+    lines += ["", "Excess lag histogram (5s bins):"]
+    lines.append("```")
+    lines.append(lag_histogram(matched, "excess_lag_sec").to_string())
+    lines.append("```")
+    return lines
+
+
 def render_detailed_report(report: RaceReport) -> str:
     r = report
     lines = [
@@ -221,8 +287,17 @@ def render_detailed_report(report: RaceReport) -> str:
         f"_Race date: {r.race_date} | Distance: {r.distance} | Gun time: {_fmt_time(r.gun_time)}_",
         "",
         "## Overview",
-        f"- Bib/chip assignments printed: {r.n_bib_chip_entries}",
     ]
+    if not r.chip_timed:
+        lines += _render_field_counts(r)
+        lines += _render_no_chip_overview(r, include_bibs=True)
+        lines += _render_notes(r.notes + r.detail_notes)
+        lines += _render_queue_lag(r)
+        lines += ["", "## Finish-Line Density"]
+        lines += _render_finish_density(r, verbose=True)
+        return "\n".join(lines) + "\n"
+
+    lines.append(f"- Bib/chip assignments printed: {r.n_bib_chip_entries}")
     lines += _render_field_counts(r)
     lines.append(f"- Chip-computed finishes: {r.classified['finish_time'].notna().sum()}")
     lines += _render_notes(r.notes + r.detail_notes)
@@ -301,26 +376,7 @@ def render_detailed_report(report: RaceReport) -> str:
 
     lines += _render_mat_diagnostics(r)
 
-    lines += ["", "## Finish-to-Bib-Scan Queue Lag"]
-    if r.lag is None:
-        lines.append("No barcode-scanner.log available for this race.")
-    else:
-        matched = r.lag.dropna(subset=["scan_time"])
-        lines += [
-            f"- Finishers with a matched scan: {len(matched)} of {len(r.lag)}",
-            f"- Raw lag (sec): median {matched['lag_sec'].median():.2f}, "
-            f"90th pct {matched['lag_sec'].quantile(0.90):.2f}, "
-            f"range {matched['lag_sec'].min():.2f}-{matched['lag_sec'].max():.2f}",
-            f"- Excess lag over baseline (sec): median {matched['excess_lag_sec'].median():.2f}, "
-            f"90th pct {matched['excess_lag_sec'].quantile(0.90):.2f}",
-        ]
-        corr = matched["excess_lag_sec"].corr(matched["finishers_in_prior_window"])
-        verdict = "no evidence of a sustained queue" if abs(corr) < 0.2 else "excess lag tracks finisher density -- a queue likely formed"
-        lines.append(f"- Excess lag vs. local finisher density correlation: {corr:.3f} ({verdict})")
-        lines += ["", "Excess lag histogram (5s bins):"]
-        lines.append("```")
-        lines.append(lag_histogram(matched, "excess_lag_sec").to_string())
-        lines.append("```")
+    lines += _render_queue_lag(r)
 
     lines += ["", "## Finish-Line Density"]
     lines += _render_finish_density(r, verbose=True)
@@ -346,10 +402,13 @@ def render_sanitized_report(report: RaceReport) -> str:
         "## Overview",
     ]
     lines += _render_field_counts(r)
+    if not r.chip_timed:
+        lines += _render_no_chip_overview(r, include_bibs=False)
     lines += _render_notes(r.notes)
 
-    lines += ["", "## Read Reliability"]
-    lines += _render_read_reliability(r, include_bibs=False)
+    if r.chip_timed:
+        lines += ["", "## Read Reliability"]
+        lines += _render_read_reliability(r, include_bibs=False)
 
     lines += ["", "## Finish-Line Density"]
     lines += _render_finish_density(r, verbose=False)
@@ -370,6 +429,8 @@ def _summary_notes_cell(report: RaceReport) -> str:
     when it actually happens is enough."""
     r = report
     notes = list(r.notes)
+    if not r.chip_timed:
+        notes = ["Not chip timed"] + notes
     if len(r.no_chip_assigned):
         notes = [f"{len(r.no_chip_assigned)} no chip assigned"] + notes
     if not notes:
@@ -388,15 +449,21 @@ def render_summary_row(report: RaceReport) -> str:
     of this repo's reports/ and its copy under fsrc-tech's
     docs/race-services/reports/, see CLAUDE.md)."""
     r = report
-    n_start_miss = len(r.genuine_start_miss_bibs())  # includes zero_reads; excludes confirmed drops
-    n_finish_miss = len(r.genuine_finish_miss_bibs())  # includes zero_reads; excludes confirmed drops
     peak_density = r.density_rolling["finishers_in_window"].max()
     peak_burst = r.density_rolling_burst["finishers_in_window"].max()
 
+    if r.chip_timed:
+        n_start_miss = len(r.genuine_start_miss_bibs())  # includes zero_reads; excludes confirmed drops
+        n_finish_miss = len(r.genuine_finish_miss_bibs())  # includes zero_reads; excludes confirmed drops
+        chip_cells = f"{len(r.zero_reads)} | {n_start_miss} | {n_finish_miss} | {r.pct_read_opportunities_missed():.1f}%"
+    else:
+        # summary_merge.py keys on these "n/a" cells to leave the row out of
+        # the pooled Overall chip-read totals.
+        chip_cells = "n/a | n/a | n/a | n/a"
+
     return (
         f"| [{r.race_date}]({r.race_date}.md) | {r.distance} | {r.n_participants} | "
-        f"{len(r.zero_reads)} | {n_start_miss} | {n_finish_miss} | "
-        f"{r.pct_read_opportunities_missed():.1f}% | {peak_density} | {peak_burst} | {_summary_notes_cell(r)} |"
+        f"{chip_cells} | {peak_density} | {peak_burst} | {_summary_notes_cell(r)} |"
     )
 
 
@@ -434,7 +501,9 @@ def render_summary_legend() -> str:
         "a 60s window can smooth over — more typical of FSRC's small-field races.\n"
         "- **Notes** — kept short here (full detail is on the linked per-race "
         "report); a no-chip-assigned count only appears here when a race "
-        "actually had one (rare process problem, not a permanent column).\n\n"
+        "actually had one (rare process problem, not a permanent column).\n"
+        "- **n/a** — the race was not chip timed (Time Machine only), so the "
+        "chip read columns don't apply; Participants is the finisher count.\n\n"
         "See the per-race sanitized report for the recovered-vs-unrecovered "
         "backup-timing breakdown.\n"
     )

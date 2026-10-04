@@ -22,6 +22,36 @@ import pandas as pd
 from chip_timing_analysis.analysis.timing_utils import rolling_count
 
 
+def scanner_clock_offset(
+    tm_entries: pd.DataFrame,
+    gun_time: pd.Timestamp,
+    tolerance: pd.Timedelta = pd.Timedelta(seconds=2),
+) -> pd.Timedelta | None:
+    """Offset to add to a tmtility-laptop timestamp (barcode-scanner.log,
+    tm-reader.log) to put it on the finish-time clock. None if there are no
+    TM entries to derive it from.
+
+    tmtility writes each TM entry's time of day as RDS's gun time floored to
+    the second (copied from RDS's display) plus the TM's elapsed time, so
+    floor(gun_time) + elapsed - recv_time is the offset for each entry, plus
+    a small serial/processing delay. Entries far from the median (a pre-race
+    test entry, an unrelated race the same day) are dropped, and the largest
+    remaining value is used since it has the least delay. Measured spread
+    within one race is ~0.6s.
+
+    Found on Pink and Blue 5K (2026-10-03): the RDS laptop's clock and the
+    tmtility laptop's clock were ~26s apart, so nearly every bib scan
+    appeared to come *before* its finish. Every chip race checked also has a
+    small nonzero offset (-0.5s to -2.7s: the dropped fraction of a second
+    plus drift between the two laptops).
+    """
+    if tm_entries.empty:
+        return None
+    diffs = gun_time.floor("s") + tm_entries["elapsed"] - tm_entries["recv_time"]
+    near = diffs[(diffs - diffs.median()).abs() <= tolerance]
+    return near.max()
+
+
 def compute_lag(classified: pd.DataFrame, scans: pd.DataFrame) -> pd.DataFrame:
     """Join finish_time (from classify_start_finish) to the first scan at/after
     it, per bib, and compute lag in seconds.

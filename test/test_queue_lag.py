@@ -7,6 +7,7 @@ from chip_timing_analysis.analysis.queue_lag import (
     add_excess_lag,
     add_finish_rate,
     lag_histogram,
+    scanner_clock_offset,
 )
 
 FT = pd.Timestamp("2026-07-04 09:00:00")
@@ -145,3 +146,51 @@ def test_lag_histogram_drops_nan():
     hist = lag_histogram(lag, "excess_lag_sec", bin_width=5.0)
 
     assert hist.sum() == 2
+
+
+# ----------------------------------------------------------------------
+# scanner_clock_offset
+# ----------------------------------------------------------------------
+
+def _tm_entries(rows: list[tuple]) -> pd.DataFrame:
+    """rows: list of (recv_time, elapsed_sec)."""
+    return pd.DataFrame(
+        [{"recv_time": r, "pos": i + 1, "elapsed": pd.Timedelta(seconds=e)} for i, (r, e) in enumerate(rows)],
+        columns=["recv_time", "pos", "elapsed"],
+    )
+
+
+def test_scanner_clock_offset_uses_floored_gun_time():
+    gun = pd.Timestamp("2026-10-03 08:15:28.825")
+    # TM clock started at 08:15:01.90 laptop time; zero-delay entry
+    entries = _tm_entries([(pd.Timestamp("2026-10-03 08:33:24.40"), 1102.50)])
+
+    offset = scanner_clock_offset(entries, gun)
+
+    # floor(gun) 08:15:28 + 18:22.50 = 08:33:50.50, minus 08:33:24.40
+    assert offset == pd.Timedelta(seconds=26.10)
+
+
+def test_scanner_clock_offset_takes_least_delayed_entry():
+    gun = pd.Timestamp("2026-10-03 08:15:00")
+    entries = _tm_entries([
+        (pd.Timestamp("2026-10-03 08:35:00.30"), 1200),  # 0.3s delay
+        (pd.Timestamp("2026-10-03 08:36:00.10"), 1260),  # 0.1s delay
+    ])
+
+    assert scanner_clock_offset(entries, gun) == pd.Timedelta(seconds=-0.10)
+
+
+def test_scanner_clock_offset_ignores_outlier_test_entry():
+    gun = pd.Timestamp("2026-10-03 08:15:00")
+    entries = _tm_entries([
+        (pd.Timestamp("2026-10-03 07:10:02"), 5),  # pre-race test press
+        (pd.Timestamp("2026-10-03 08:35:00.20"), 1200),
+        (pd.Timestamp("2026-10-03 08:36:00.20"), 1260),
+    ])
+
+    assert scanner_clock_offset(entries, gun) == pd.Timedelta(seconds=-0.20)
+
+
+def test_scanner_clock_offset_none_without_entries():
+    assert scanner_clock_offset(_tm_entries([]), pd.Timestamp("2026-10-03 08:15:00")) is None

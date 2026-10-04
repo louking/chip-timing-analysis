@@ -13,6 +13,9 @@ from chip_timing_analysis.report.render import (
     render_summary_legend,
     append_summary_row,
     _SUMMARY_HEADER,
+    _render_queue_lag,
+    render_detailed_report,
+    render_sanitized_report,
 )
 
 GUN = pd.Timestamp("2026-05-25 09:00:00")
@@ -262,3 +265,82 @@ def test_append_summary_row_rewrites_header_from_current_constant(tmp_path):
     content = summary_path.read_text(encoding="utf-8")
     assert content.startswith(_SUMMARY_HEADER)
     assert "Old Stale Header" not in content
+
+
+# ----------------------------------------------------------------------
+# races with no chip timing (RaceReport.chip_timed False)
+# ----------------------------------------------------------------------
+
+def _no_chip_report(**overrides):
+    finishes = pd.DataFrame({
+        "bib": [101, 102, 103],
+        "finish_time": [GUN + pd.Timedelta(minutes=m) for m in (20, 21, 25)],
+    })
+    defaults = dict(
+        chip_timed=False, n_bib_chip_entries=0, n_participants=3, classified=finishes,
+        finish_gap_sec=pd.Series([60.0, 240.0]), checked_in_no_finish=[104, 105],
+        density_rolling=pd.DataFrame({"finish_time": finishes["finish_time"], "finishers_in_window": [1, 2, 1]}),
+        density_rolling_burst=pd.DataFrame({"finish_time": finishes["finish_time"], "finishers_in_window": [1, 1, 1]}),
+    )
+    defaults.update(overrides)
+    return _report(**defaults)
+
+
+def test_render_summary_row_no_chip_race_shows_na_chip_cells():
+    row = render_summary_row(_no_chip_report())
+
+    assert "| 3 | n/a | n/a | n/a | n/a | 2 | 1 | Not chip timed |" in row
+
+
+def test_detailed_report_no_chip_race_omits_chip_sections_and_names_bibs():
+    text = render_detailed_report(_no_chip_report())
+
+    assert "Not chip timed" in text
+    assert "## Missed Reads" not in text
+    assert "Bib/chip assignments printed" not in text
+    assert "2 participant(s) checked in but have no finish time (104, 105)" in text
+    assert "## Finish-Line Density" in text
+
+
+def test_sanitized_report_no_chip_race_omits_read_reliability_and_bibs():
+    text = render_sanitized_report(_no_chip_report())
+
+    assert "## Read Reliability" not in text
+    assert "2 participant(s) checked in but have no finish time." in text
+    assert "104" not in text
+
+
+def _lag(scan_offsets_sec):
+    finish = [GUN + pd.Timedelta(minutes=20 + i) for i in range(len(scan_offsets_sec))]
+    scan = [f + pd.Timedelta(seconds=o) if o is not None else pd.NaT for f, o in zip(finish, scan_offsets_sec)]
+    lag = pd.DataFrame({"bib": range(101, 101 + len(finish)), "finish_time": finish, "scan_time": scan})
+    lag["lag_sec"] = (lag["scan_time"] - lag["finish_time"]).dt.total_seconds()
+    lag["excess_lag_sec"] = lag["lag_sec"] - lag["lag_sec"].min()
+    lag["finishers_in_prior_window"] = 1
+    return lag
+
+
+def test_queue_lag_no_matched_scans_says_so():
+    text = "\n".join(_render_queue_lag(_report(lag=_lag([None, None]))))
+
+    assert "No barcode scan matched any of the 2 finishers" in text
+
+
+def test_queue_lag_mostly_unmatched_suspects_clock_offset():
+    text = "\n".join(_render_queue_lag(_report(lag=_lag([5, None, None]))))
+
+    assert "Only 1 of 3 finishers" in text
+    assert "different clocks" in text
+    assert "Raw lag" not in text
+
+
+def test_queue_lag_reports_stats_when_most_scans_match():
+    text = "\n".join(_render_queue_lag(_report(lag=_lag([3, 5, None]))))
+
+    assert "Finishers with a matched scan: 2 of 3" in text
+
+
+def test_queue_lag_reports_scanner_clock_offset():
+    text = "\n".join(_render_queue_lag(_report(lag=_lag([3, 5]), scanner_clock_offset=pd.Timedelta(seconds=26.15))))
+
+    assert "Scan times shifted by +26.15s" in text

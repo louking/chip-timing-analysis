@@ -9,10 +9,11 @@ from chip_timing_analysis.report.build import (
     _csv_classify_grouped,
     _rdgo_distance_label,
     _backfill_from_local_log,
+    _build_no_chip_report,
 )
 from chip_timing_analysis.parsers import rdgo_export
 
-from factories import make_export
+from factories import make_export, make_participant, make_read
 
 GUN = pd.Timestamp("2026-05-25 09:00:00")
 
@@ -356,3 +357,79 @@ def test_backfill_skips_bib_absent_from_local_log():
 
     assert pd.isna(result.iloc[0]["start_time"])
     assert suspects == []
+
+
+# ----------------------------------------------------------------------
+# _build_no_chip_report
+# ----------------------------------------------------------------------
+
+def _no_chip_export(entity_map, read_data):
+    return make_export(
+        scored_events=[{
+            "scored_event_name": "5k Run - Timed Event",
+            "min_finish_time": None,
+            "actual_start_ts": int(GUN.value // 1_000_000),
+            "included_event_ids": ["100"],
+            "starting_point_id": None,
+            "default_segment_finish_occurrence": 1,
+        }],
+        devices={2: {"device_id": 2, "hardware_name": None, "device_display_name": "Time Machine-FILE"}},
+        entity_map=entity_map,
+        read_data=read_data,
+    )
+
+
+def _build_no_chip(export, tmp_path, **overrides):
+    kwargs = dict(
+        race_dir=tmp_path / "race", rdgo=export, race_name="Test", race_date="2026-05-25",
+        distance="5K", gun_time=GUN, notes=None, detail_notes=None, n_registered=None,
+        n_starters=None, n_finishers=None, known_drops=set(), exclude_bibs=set(),
+    )
+    kwargs.update(overrides)
+    return _build_no_chip_report(**kwargs)
+
+
+def test_build_no_chip_report_counts_finishers_only(tmp_path):
+    export = _no_chip_export(
+        entity_map=[
+            make_participant(101, scoring_entity_id=1, event_id="100", checked_in=True),
+            make_participant(102, scoring_entity_id=2, event_id="100", checked_in=True),
+            make_participant(103, scoring_entity_id=3, event_id="100", checked_in=True, rdgo_dns=True),
+            make_participant(201, scoring_entity_id=4, event_id="999", checked_in=True),  # untimed event
+        ],
+        read_data={
+            "1": [make_read(1, device_id=2, timestamp=GUN + pd.Timedelta(minutes=25))],
+            "2": [make_read(1, device_id=2, timestamp=GUN + pd.Timedelta(minutes=20))],
+            "4": [make_read(1, device_id=2, timestamp=GUN + pd.Timedelta(minutes=30))],
+        },
+    )
+
+    report = _build_no_chip(export, tmp_path)
+
+    assert report.chip_timed is False
+    assert report.n_participants == 2
+    assert report.classified["bib"].tolist() == [102, 101]  # finish order
+    assert report.checked_in_no_finish == [103]
+    assert report.no_chip_assigned.empty
+    assert report.zero_reads.empty and report.missed_start_only.empty and report.missed_finish_only.empty
+    assert report.pct_read_opportunities_missed() == 0.0
+    assert report.lag is None  # no logs/barcode-scanner.log next to race_dir
+
+
+def test_build_no_chip_report_applies_exclude_bibs(tmp_path):
+    export = _no_chip_export(
+        entity_map=[
+            make_participant(101, scoring_entity_id=1, event_id="100", checked_in=True),
+            make_participant(102, scoring_entity_id=2, event_id="100", checked_in=True),
+            make_participant(103, scoring_entity_id=3, event_id="100", checked_in=True),
+        ],
+        read_data={
+            "1": [make_read(1, device_id=2, timestamp=GUN + pd.Timedelta(minutes=25))],
+            "2": [make_read(1, device_id=2, timestamp=GUN + pd.Timedelta(minutes=20))],
+        },
+    )
+
+    report = _build_no_chip(export, tmp_path, exclude_bibs={101, 103})
+
+    assert report.classified["bib"].tolist() == [102]
+    assert report.checked_in_no_finish == []

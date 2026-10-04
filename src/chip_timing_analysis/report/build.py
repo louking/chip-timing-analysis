@@ -14,6 +14,7 @@ from chip_timing_analysis.parsers.trident_raw import parse_trident_raw
 from chip_timing_analysis.parsers.bib_chip import parse_bib_chip
 from chip_timing_analysis.parsers.tm_data import parse_tm_data
 from chip_timing_analysis.parsers.barcode_scanner import parse_barcode_scans
+from chip_timing_analysis.parsers.tm_reader import parse_tm_entries
 from chip_timing_analysis.parsers.backup_time_selected import parse_backup_time_selected
 from chip_timing_analysis.parsers import rdgo_export
 from chip_timing_analysis.analysis.start_finish import (
@@ -22,7 +23,7 @@ from chip_timing_analysis.analysis.start_finish import (
     missed_finish_reads,
     GAP_FACTOR_BY_DISTANCE,
 )
-from chip_timing_analysis.analysis.queue_lag import compute_lag, add_excess_lag, add_finish_rate
+from chip_timing_analysis.analysis.queue_lag import compute_lag, add_excess_lag, add_finish_rate, scanner_clock_offset
 from chip_timing_analysis.analysis.finish_density import finish_density, rolling_finish_rate, finish_gaps, STANDARD_WINDOW, BURST_WINDOW
 from chip_timing_analysis.analysis.mat_reliability import (
     mat_summary as compute_mat_summary,
@@ -76,6 +77,10 @@ class RaceReport:
 
     backup: pd.DataFrame | None = None  # parse_backup_time_selected output, if available
     lag: pd.DataFrame | None = None  # compute_lag + add_excess_lag + add_finish_rate output
+    # Shift applied to barcode-scanner.log times before computing lag, from
+    # tm-reader.log (see analysis.queue_lag.scanner_clock_offset()). None if
+    # there was no tm-reader.log (or no TM entries on race day) to derive it.
+    scanner_clock_offset: pd.Timedelta | None = None
     density_bins: pd.DataFrame | None = None  # finish_density() output
     density_rolling: pd.DataFrame | None = None  # rolling_finish_rate(), STANDARD_WINDOW (60s) -- matches RRTC's rpm convention
     density_rolling_burst: pd.DataFrame | None = None  # rolling_finish_rate(), BURST_WINDOW (15s) -- catches short clusters a 60s window smooths over
@@ -120,6 +125,17 @@ class RaceReport:
     # each bib's actual read timing before treating it as one. Only computed
     # when both the rdgo export and f_*.log are present for the same race.
     network_interruption_suspects: list[int] = field(default_factory=list)
+
+    # False for a race timed by Time Machine only, no chips at all (detected
+    # from the RDS export's devices -- see rdgo_export.has_chip_timing()).
+    # Every chip read-reliability field above (no_chip_assigned, zero_reads,
+    # missed_*, mat diagnostics) is then empty and meaningless, and render.py
+    # leaves those sections out rather than reporting every finisher as
+    # "no chip assigned". checked_in_no_finish is only filled in for that
+    # case: without a start read, "checked in, never started" and "started,
+    # didn't finish" can't be told apart (see rdgo_export.checked_in_no_finish()).
+    chip_timed: bool = True
+    checked_in_no_finish: list[int] = field(default_factory=list)
 
     def finish_miss_bibs(self) -> set:
         """All bibs with no finish read: zero_reads + missed_finish_only.
@@ -226,6 +242,8 @@ def _rdgo_distance_label(rdgo: rdgo_export.RdgoExport) -> str:
     reverse = {v: k for k, v in GAP_FACTOR_BY_DISTANCE.items()}
     labels = {}
     for se in rdgo.scored_events:
+        if se.get("min_finish_time") is None:
+            continue
         gap = pd.Timedelta(milliseconds=se["min_finish_time"])
         labels[gap] = reverse.get(gap, se.get("scored_event_name", "unknown"))
     return " & ".join(labels[gap] for gap in sorted(labels))
@@ -298,6 +316,106 @@ def _backfill_from_local_log(
             suspects.add(bib)
 
     return classified_all, sorted(suspects)
+
+
+def _queue_lag(
+    race_dir: Path, classified: pd.DataFrame, gun_time: pd.Timestamp,
+) -> tuple[pd.DataFrame | None, pd.Timedelta | None]:
+    """Finish-to-bib-scan lag, if a barcode-scanner.log is available, plus
+    the clock offset applied to the scan times. Both logs are shared/
+    long-lived and live one level up at logs/, not per-race. Scan times are
+    on the tmtility laptop's clock, which can differ from the finish times'
+    clock; when tm-reader.log is there too, the offset is derived from it
+    and scans are shifted onto the finish-time clock before matching."""
+    logs_dir = race_dir.parent / "logs"
+    scanner_log = _find_one(str(logs_dir / "barcode-scanner.log"))
+    if not scanner_log:
+        return None, None
+
+    offset = None
+    tm_reader_log = _find_one(str(logs_dir / "tm-reader.log"))
+    if tm_reader_log and pd.notna(gun_time):
+        day = gun_time.normalize()
+        tm_entries = parse_tm_entries(tm_reader_log, start=day, end=day + pd.Timedelta(days=1))
+        offset = scanner_clock_offset(tm_entries, gun_time)
+
+    # Widen the window by the offset too, so a large offset can't push real
+    # scans outside it before they're shifted.
+    slack = pd.Timedelta(minutes=5) + (abs(offset) if offset is not None else pd.Timedelta(0))
+    window_start = classified["finish_time"].min() - slack
+    window_end = classified["finish_time"].max() + slack
+    scans = parse_barcode_scans(scanner_log, start=window_start, end=window_end)
+    if offset is not None:
+        scans = scans.assign(scan_time=scans["scan_time"] + offset)
+    lag = compute_lag(classified, scans)
+    lag = add_excess_lag(lag)
+    return add_finish_rate(lag), offset
+
+
+def _build_no_chip_report(
+    race_dir: Path,
+    rdgo: rdgo_export.RdgoExport,
+    race_name: str,
+    race_date: str,
+    distance: str,
+    gun_time: pd.Timestamp,
+    notes: list[str] | None,
+    detail_notes: list[str] | None,
+    n_registered: int | None,
+    n_starters: int | None,
+    n_finishers: int | None,
+    known_drops: set,
+    exclude_bibs: set,
+) -> RaceReport:
+    """RaceReport for a race with no chip timing (Time Machine only). The
+    participant universe is the scored event's finishers -- the only thing
+    the data can confirm without start reads. Chip read-reliability fields
+    are left empty; finish density and queue lag still apply (and matter
+    more here, since the TM operator is the primary timer)."""
+    in_event_bibs = {
+        e["entity"]["Participant"]["fields"].get("bib_num")
+        for e in rdgo.entity_map
+        if rdgo_export._in_scored_event(rdgo, e["entity"]["Participant"]["fields"])
+    }
+    classified_all = rdgo_export.classify_start_finish(rdgo)
+    classified = classified_all[
+        classified_all["bib"].isin(in_event_bibs - exclude_bibs) & classified_all["finish_time"].notna()
+    ].sort_values("finish_time").reset_index(drop=True)
+
+    tm_data = classified[["bib", "finish_time"]].reset_index(drop=True)
+    tm_data.insert(0, "seq", range(1, len(tm_data) + 1))
+
+    empty = classified.iloc[0:0]
+    lag, offset = _queue_lag(race_dir, classified, gun_time)
+    return RaceReport(
+        race_name=race_name,
+        race_date=race_date,
+        distance=distance,
+        gun_time=gun_time,
+        n_bib_chip_entries=0,
+        n_participants=len(classified),
+        n_registered=n_registered,
+        n_starters=n_starters,
+        n_finishers=n_finishers,
+        classified=classified,
+        tm_data=tm_data,
+        no_chip_assigned=tm_data.iloc[0:0][["bib", "finish_time"]],
+        zero_reads=empty,
+        missed_start_only=empty,
+        missed_finish_only=empty,
+        backup=None,
+        lag=lag,
+        scanner_clock_offset=offset,
+        density_bins=finish_density(classified),
+        density_rolling=rolling_finish_rate(classified, window=STANDARD_WINDOW),
+        density_rolling_burst=rolling_finish_rate(classified, window=BURST_WINDOW),
+        finish_gap_sec=finish_gaps(classified),
+        notes=notes or [],
+        detail_notes=detail_notes or [],
+        known_drops=sorted(known_drops - exclude_bibs),
+        chip_timed=False,
+        checked_in_no_finish=[b for b in rdgo_export.checked_in_no_finish(rdgo) if b not in exclude_bibs],
+    )
 
 
 def build_race_report(
@@ -377,13 +495,18 @@ def build_race_report(
             race_date = rdgo.race["start_date"]
         if distance is None:
             distance = _rdgo_distance_label(rdgo)
+        if n_registered is None:
+            n_registered = rdgo_export.n_registered(rdgo)
+        if not rdgo_export.has_chip_timing(rdgo):
+            return _build_no_chip_report(
+                race_dir, rdgo, race_name, race_date, distance, gun_time, notes, detail_notes,
+                n_registered, n_starters, n_finishers, known_drops, exclude_bibs,
+            )
         bib_gap_factors = rdgo_export.bib_gap_factors(rdgo)
         bib_chip = rdgo_export.bib_chip(rdgo)
         classified_all_raw = rdgo_export.classify_start_finish(rdgo)
         known_drops |= set(rdgo_export.known_drops(rdgo))
         n_bib_chip_entries = len(bib_chip)
-        if n_registered is None:
-            n_registered = rdgo_export.n_registered(rdgo)
 
         # tm_data/backup are derived from the *unrestricted* classification --
         # a no-chip bib's backup-sourced finish still needs to show up here
@@ -508,16 +631,7 @@ def build_race_report(
     mat_summ = compute_mat_summary(raw_reads) if raw_reads is not None else None
     mat_verdict = mat_reliability_verdict(mat_summ, flag_weak_mats(mat_summ)) if mat_summ is not None else None
 
-    # barcode-scanner.log is shared/long-lived, lives one level up at data/logs/, not per-race
-    scanner_log = _find_one(str(race_dir.parent / "logs" / "barcode-scanner.log"))
-    lag = None
-    if scanner_log:
-        window_start = classified["finish_time"].min() - pd.Timedelta(minutes=5)
-        window_end = classified["finish_time"].max() + pd.Timedelta(minutes=5)
-        scans = parse_barcode_scans(scanner_log, start=window_start, end=window_end)
-        lag = compute_lag(classified, scans)
-        lag = add_excess_lag(lag)
-        lag = add_finish_rate(lag)
+    lag, offset = _queue_lag(race_dir, classified, gun_time)
 
     return RaceReport(
         race_name=race_name,
@@ -537,6 +651,7 @@ def build_race_report(
         missed_finish_only=missed_finish_only,
         backup=backup,
         lag=lag,
+        scanner_clock_offset=offset,
         density_bins=finish_density(classified),
         density_rolling=rolling_finish_rate(classified, window=STANDARD_WINDOW),
         density_rolling_burst=rolling_finish_rate(classified, window=BURST_WINDOW),

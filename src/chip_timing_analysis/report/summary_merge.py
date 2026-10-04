@@ -26,8 +26,9 @@ markers (invisible in rendered Markdown):
 ``<!-- chip-timing-analysis:overall:start -->`` / ``:overall:end``
     Optional, inside the preamble. The bullet list between them is regenerated
     from the merged row set (race count, total participants, zero-reads,
-    start/finish misses, pooled % missed). Prose outside the markers -- before
-    ``:start`` or after ``:end`` -- is untouched.
+    start/finish misses, pooled % missed). Rows for races that weren't chip
+    timed (``n/a`` chip cells) are left out of these totals. Prose outside
+    the markers -- before ``:start`` or after ``:end`` -- is untouched.
 
 If the destination has no ``summary-table`` marker, this falls back to a
 verbatim copy and returns a warning. ``publish.py`` prints the warnings.
@@ -89,6 +90,16 @@ def parse_row(line: str) -> SummaryRow | None:
         )
     except ValueError:
         return None
+
+
+def is_no_chip_row(line: str) -> bool:
+    """Whether a dated row is for a race that wasn't chip timed -- render.py
+    writes ``n/a`` in all four chip-read cells (Zero Reads through % Missed)
+    for those. They're left out of the Overall chip-read totals on purpose,
+    so they don't count toward the "non-numeric cells" warning either.
+    """
+    cells = [c.strip() for c in line.strip().strip("|").split("|")]
+    return len(cells) >= 7 and all(c.lower() == "n/a" for c in cells[3:7])
 
 
 def _plural(n: int, singular: str, plural: str) -> str:
@@ -180,7 +191,7 @@ def _regen_overall(preamble: list[str], merged_rows: list[str], warnings: list[s
     bullets = render_overall(merged_rows)
     if not bullets:
         return preamble
-    n_excluded = sum(1 for ln in merged_rows if parse_row(ln) is None)
+    n_excluded = sum(1 for ln in merged_rows if parse_row(ln) is None and not is_no_chip_row(ln))
     if n_excluded:
         warnings.append(
             f"{n_excluded} table row(s) had non-numeric count cells and were left "
