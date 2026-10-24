@@ -123,7 +123,9 @@ def _render_read_reliability(report: RaceReport, include_bibs: bool) -> list[str
     if len(r.zero_reads):
         lines.append(f"- {len(r.zero_reads)} participant(s) had a chip assigned but no reads recorded at all (possible non-functioning chip).")
 
-    if recon["available"]:
+    # With no finish misses there's nothing for backup timing to have covered.
+    has_backup_cases = n_finish_miss or recon["n_network"]
+    if has_backup_cases and recon["available"]:
         lines.append(f"- Of those {n_finish_miss} finish misses, {recon['n_zero_read']} were recovered via backup timing and scored correctly.")
         if recon["n_network"]:
             lines.append(
@@ -131,7 +133,7 @@ def _render_read_reliability(report: RaceReport, include_bibs: bool) -> list[str
                 f"scoring (brief network interruption) but were recovered from backup timing / the local device "
                 f"log{bibs('network_bibs')}."
             )
-    else:
+    elif has_backup_cases:
         lines.append("- Backup-timing coverage not available for this race (no Data Check report provided).")
 
     if recon["n_unrecovered"]:
@@ -345,8 +347,11 @@ def render_detailed_report(report: RaceReport) -> str:
         finish_miss_bibs = r.finish_miss_bibs()
         no_chip_bibs = set(r.no_chip_assigned["bib"])
         lines += ["", f"### Backup timing used ({len(r.backup)})"]
-        lines.append("| bib | name | finish_time | reason |")
-        lines.append("|---|---|---|---|")
+        if r.backup.empty:
+            lines.append("None.")
+        else:
+            lines.append("| bib | name | finish_time | reason |")
+            lines.append("|---|---|---|---|")
         for _, row in r.backup.iterrows():
             if row["bib"] in finish_miss_bibs:
                 reason = "no antenna read at finish"

@@ -169,6 +169,28 @@ def test_render_read_reliability_backup_unavailable_says_so():
     assert any("not available" in line for line in lines)
 
 
+def test_render_read_reliability_no_backup_line_without_finish_misses():
+    # Mustang's Milestone 5K: no finish misses, so nothing for backup to cover
+    for backup in (None, _bibs_df([])):
+        lines = _render_read_reliability(_report(backup=backup), include_bibs=False)
+
+        assert not any("backup" in line.lower() for line in lines)
+
+
+def test_render_detailed_report_empty_backup_table_says_none():
+    finishes = _bibs_df([101, 102], {"finish_time": [GUN + pd.Timedelta(minutes=m) for m in (20, 21)]})
+    report = _report(
+        backup=_bibs_df([], {"name": [], "finish_time": []}), classified=finishes, tm_data=finishes,
+        finish_gap_sec=pd.Series([60.0]),
+        density_rolling=finishes.assign(finishers_in_window=[1, 2]),
+        density_rolling_burst=finishes.assign(finishers_in_window=[1, 1]),
+    )
+
+    text = render_detailed_report(report)
+
+    assert "### Backup timing used (0)\nNone." in text
+
+
 # ----------------------------------------------------------------------
 # _summary_notes_cell
 # ----------------------------------------------------------------------

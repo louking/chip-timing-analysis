@@ -75,7 +75,7 @@ class RaceReport:
     missed_start_only: pd.DataFrame = None  # has a finish read, but no start read
     missed_finish_only: pd.DataFrame = None  # has a start read, but no finish read
 
-    backup: pd.DataFrame | None = None  # parse_backup_time_selected output, if available
+    backup: pd.DataFrame | None = None  # parse_backup_time_selected output; empty if none used, None if unknown
     lag: pd.DataFrame | None = None  # compute_lag + add_excess_lag + add_finish_rate output
     # Shift applied to barcode-scanner.log times before computing lag, from
     # tm-reader.log (see analysis.queue_lag.scanner_clock_offset()). None if
@@ -515,9 +515,9 @@ def build_race_report(
         tm_data = classified_all_raw.loc[classified_all_raw["finish_time"].notna(), ["bib", "finish_time"]].reset_index(drop=True)
         tm_data.insert(0, "seq", range(1, len(tm_data) + 1))
 
+        # Kept even when empty: the export always says which finishes used
+        # backup, so an empty table means none did, not that it's unknown.
         backup = rdgo_export.backup_time_selected(rdgo, classified_all_raw)
-        if backup.empty:
-            backup = None
 
         # analysis.start_finish.classify_start_finish() (the CSV path) only
         # ever produces rows for bib_chip's own bibs -- a no-chip bib never
