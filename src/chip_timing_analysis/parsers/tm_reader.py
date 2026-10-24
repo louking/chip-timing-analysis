@@ -16,8 +16,10 @@ laptop's clock, the same clock barcode-scanner.log uses. Comparing the two
 gives the offset between the scanner log and the finish times (see
 analysis.queue_lag.scanner_clock_offset()).
 
-Other message shapes (`XC 00:00:00.00` clock start/reset, `EVENT 045`) are
-skipped.
+The TM's clock start/reset (`XC 00:00:00.00`, pressed by hand) is read
+separately by parse_tm_resets(): each entry's elapsed time counts from the
+most recent one, so it tells a pre-race test entry apart from a race entry.
+Other message shapes (`XC` with a nonzero time, `EVENT 045`) are skipped.
 """
 
 from __future__ import annotations
@@ -67,6 +69,35 @@ def parse_tm_entries(
     if end is not None:
         df = df[df["recv_time"] <= pd.Timestamp(end)]
     return df.reset_index(drop=True)
+
+
+_RESET_RE = re.compile(
+    r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) "
+    r"tm-reader DEBUG: time machine msg processed: b'.*?XC 00:00:00\.00 "
+)
+
+
+def parse_tm_resets(
+    file_path: str | Path,
+    start: str | dt.datetime | None = None,
+    end: str | dt.datetime | None = None,
+) -> pd.Series:
+    """recv_time of each Time Machine clock reset (`XC 00:00:00.00`) in a
+    tm-reader.log, on the tmtility laptop's clock, in log order. start/end
+    optionally bound it to the race's window."""
+    times = []
+    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            m = _RESET_RE.match(line)
+            if m:
+                times.append(pd.Timestamp(m.group("ts").replace(",", ".")))
+
+    resets = pd.Series(times, dtype="datetime64[ns]", name="recv_time")
+    if start is not None:
+        resets = resets[resets >= pd.Timestamp(start)]
+    if end is not None:
+        resets = resets[resets <= pd.Timestamp(end)]
+    return resets.reset_index(drop=True)
 
 
 def sanity_check(df: pd.DataFrame) -> None:

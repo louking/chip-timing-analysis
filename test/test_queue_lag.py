@@ -192,5 +192,39 @@ def test_scanner_clock_offset_ignores_outlier_test_entry():
     assert scanner_clock_offset(entries, gun) == pd.Timedelta(seconds=-0.20)
 
 
+def test_scanner_clock_offset_none_when_no_entries_after_race_reset():
+    # Mustang's Milestone 5K: TM reset at the start, then failed; only entry
+    # was a test press after an earlier reset
+    gun = pd.Timestamp("2026-10-24 08:30:27.78")
+    entries = _tm_entries([(pd.Timestamp("2026-10-24 07:40:33.59"), 10.83)])
+    resets = pd.Series([pd.Timestamp("2026-10-24 07:40:22.51"), pd.Timestamp("2026-10-24 08:30:29.65")])
+
+    assert scanner_clock_offset(entries, gun, resets=resets) is None
+
+
+def test_scanner_clock_offset_uses_entries_after_reset_nearest_gun():
+    gun = pd.Timestamp("2026-10-03 08:15:00")
+    entries = _tm_entries([
+        (pd.Timestamp("2026-10-03 08:14:00.00"), 30),  # test press after 08:13:30 reset
+        (pd.Timestamp("2026-10-03 08:35:01.20"), 1200),
+        (pd.Timestamp("2026-10-03 08:36:01.20"), 1260),
+    ])
+    resets = pd.Series([pd.Timestamp("2026-10-03 08:13:30"), pd.Timestamp("2026-10-03 08:15:01")])
+
+    # the test press alone would give +0:00:30 - 1 min = -30s; it's dropped
+    assert scanner_clock_offset(entries, gun, resets=resets) == pd.Timedelta(seconds=-1.20)
+
+
+def test_scanner_clock_offset_drops_entries_after_next_reset():
+    gun = pd.Timestamp("2026-10-03 08:15:00")
+    entries = _tm_entries([
+        (pd.Timestamp("2026-10-03 08:35:00.20"), 1200),
+        (pd.Timestamp("2026-10-03 10:00:10.00"), 10),  # after a later reset
+    ])
+    resets = pd.Series([pd.Timestamp("2026-10-03 08:15:00"), pd.Timestamp("2026-10-03 10:00:00")])
+
+    assert scanner_clock_offset(entries, gun, resets=resets) == pd.Timedelta(seconds=-0.20)
+
+
 def test_scanner_clock_offset_none_without_entries():
     assert scanner_clock_offset(_tm_entries([]), pd.Timestamp("2026-10-03 08:15:00")) is None

@@ -14,7 +14,7 @@ from chip_timing_analysis.parsers.trident_raw import parse_trident_raw
 from chip_timing_analysis.parsers.bib_chip import parse_bib_chip
 from chip_timing_analysis.parsers.tm_data import parse_tm_data
 from chip_timing_analysis.parsers.barcode_scanner import parse_barcode_scans
-from chip_timing_analysis.parsers.tm_reader import parse_tm_entries
+from chip_timing_analysis.parsers.tm_reader import parse_tm_entries, parse_tm_resets
 from chip_timing_analysis.parsers.backup_time_selected import parse_backup_time_selected
 from chip_timing_analysis.parsers import rdgo_export
 from chip_timing_analysis.analysis.start_finish import (
@@ -337,7 +337,8 @@ def _queue_lag(
     if tm_reader_log and pd.notna(gun_time):
         day = gun_time.normalize()
         tm_entries = parse_tm_entries(tm_reader_log, start=day, end=day + pd.Timedelta(days=1))
-        offset = scanner_clock_offset(tm_entries, gun_time)
+        tm_resets = parse_tm_resets(tm_reader_log, start=day, end=day + pd.Timedelta(days=1))
+        offset = scanner_clock_offset(tm_entries, gun_time, resets=tm_resets)
 
     # Widen the window by the offset too, so a large offset can't push real
     # scans outside it before they're shifted.

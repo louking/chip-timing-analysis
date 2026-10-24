@@ -26,6 +26,7 @@ def scanner_clock_offset(
     tm_entries: pd.DataFrame,
     gun_time: pd.Timestamp,
     tolerance: pd.Timedelta = pd.Timedelta(seconds=2),
+    resets: pd.Series | None = None,
 ) -> pd.Timedelta | None:
     """Offset to add to a tmtility-laptop timestamp (barcode-scanner.log,
     tm-reader.log) to put it on the finish-time clock. None if there are no
@@ -44,7 +45,25 @@ def scanner_clock_offset(
     appeared to come *before* its finish. Every chip race checked also has a
     small nonzero offset (-0.5s to -2.7s: the dropped fraction of a second
     plus drift between the two laptops).
+
+    resets (from parsers.tm_reader.parse_tm_resets()) narrows the entries
+    first to those after the TM clock reset nearest the gun and before the
+    next one, since only those count elapsed time from the race start. A
+    pre-race test entry counts from an earlier reset. Found on Mustang's
+    Milestone 5K (2026-10-24): the TM was reset at the start, then failed,
+    and its only entry was a test press 50 minutes before the gun. With one
+    entry the median filter keeps it, and the offset came out as +50:04.
+
+    The TM reset is pressed by hand, so the offset also includes the delay
+    between the trigger and that press. It can't be separated from the
+    difference between the laptops' clocks.
     """
+    if resets is not None and not resets.empty:
+        race_reset = resets.loc[(resets - gun_time).abs().idxmin()]
+        later = resets[resets > race_reset]
+        tm_entries = tm_entries[tm_entries["recv_time"] > race_reset]
+        if not later.empty:
+            tm_entries = tm_entries[tm_entries["recv_time"] < later.min()]
     if tm_entries.empty:
         return None
     diffs = gun_time.floor("s") + tm_entries["elapsed"] - tm_entries["recv_time"]
