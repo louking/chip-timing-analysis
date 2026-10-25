@@ -177,6 +177,30 @@ def test_render_read_reliability_no_backup_line_without_finish_misses():
         assert not any("backup" in line.lower() for line in lines)
 
 
+def test_render_read_reliability_late_starts_reported_separately():
+    # Headless Horseman 5K: 714/716 crossed ~8 min after the gun
+    late = _bibs_df([714, 716], {
+        "late_start_time": [GUN + pd.Timedelta(minutes=8)] * 2,
+        "late_start_n_reads": [3, 4],
+        "finish_time": [GUN + pd.Timedelta(minutes=61)] * 2,
+    })
+    report = _report(missed_start_only=_bibs_df([189]), late_starts=late)
+
+    with_bibs = _render_read_reliability(report, include_bibs=True)
+    without_bibs = _render_read_reliability(report, include_bibs=False)
+
+    assert any("1 result(s) had no chip read at the start line" in line for line in with_bibs)
+    assert any("2 participant(s) crossed the start after the start window closed" in line and "(714, 716)" in line for line in with_bibs)
+    assert not any("714" in line for line in without_bibs)
+
+
+def test_render_read_reliability_no_late_start_line_when_none():
+    for late_starts in (None, _bibs_df([], {"late_start_time": [], "finish_time": []})):
+        lines = _render_read_reliability(_report(late_starts=late_starts), include_bibs=False)
+
+        assert not any("late start" in line for line in lines)
+
+
 def test_render_detailed_report_empty_backup_table_says_none():
     finishes = _bibs_df([101, 102], {"finish_time": [GUN + pd.Timedelta(minutes=m) for m in (20, 21)]})
     report = _report(

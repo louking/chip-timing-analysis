@@ -19,6 +19,7 @@ from chip_timing_analysis.parsers.backup_time_selected import parse_backup_time_
 from chip_timing_analysis.parsers import rdgo_export
 from chip_timing_analysis.analysis.start_finish import (
     classify_start_finish,
+    late_start_reads,
     missed_start_reads,
     missed_finish_reads,
     GAP_FACTOR_BY_DISTANCE,
@@ -74,6 +75,10 @@ class RaceReport:
     zero_reads: pd.DataFrame = None
     missed_start_only: pd.DataFrame = None  # has a finish read, but no start read
     missed_finish_only: pd.DataFrame = None  # has a start read, but no finish read
+    # Chip read after the start window closed, before the finish window
+    # (bib, late_start_time, late_start_n_reads, finish_time). Taken out of
+    # missed_start_only: the chip read fine, the runner started late.
+    late_starts: pd.DataFrame | None = None
 
     backup: pd.DataFrame | None = None  # parse_backup_time_selected output; empty if none used, None if unknown
     lag: pd.DataFrame | None = None  # compute_lag + add_excess_lag + add_finish_rate output
@@ -224,6 +229,24 @@ def _csv_classify_grouped(
         for gf, group in grouped.groupby("_gap_factor")
     ]
     return pd.concat(parts, ignore_index=True) if parts else classify_start_finish(reads, bib_chip.iloc[0:0], gun_time=gun_time, gap_factor=pd.Timedelta(0))
+
+
+def _late_starts_grouped(
+    reads: pd.DataFrame,
+    bib_chip: pd.DataFrame,
+    gun_time: pd.Timestamp,
+    bib_gap_factors: dict,
+    finish_times: dict | None = None,
+) -> pd.DataFrame:
+    """analysis.start_finish.late_start_reads(), once per distinct gap
+    factor -- same reason as _csv_classify_grouped(): the finish window, and
+    so the end of the late-start window, depends on each bib's distance."""
+    grouped = bib_chip.assign(_gap_factor=bib_chip["bib"].map(bib_gap_factors)).dropna(subset=["_gap_factor"])
+    parts = [
+        late_start_reads(reads, group.drop(columns="_gap_factor"), gun_time=gun_time, gap_factor=gf, finish_times=finish_times)
+        for gf, group in grouped.groupby("_gap_factor")
+    ]
+    return pd.concat(parts, ignore_index=True) if parts else late_start_reads(reads, bib_chip.iloc[0:0], gun_time=gun_time, gap_factor=pd.Timedelta(0))
 
 
 def _rdgo_distance_label(rdgo: rdgo_export.RdgoExport) -> str:
@@ -578,6 +601,7 @@ def build_race_report(
         gun_time = pd.Timestamp(gun_time)
         gap_factor = GAP_FACTOR_BY_DISTANCE[distance]
         bib_chip = parse_bib_chip(race_dir / "bib-chip.csv")
+        bib_gap_factors = {bib: gap_factor for bib in bib_chip["bib"]}
         tm_data = parse_tm_data(race_dir / "tm-data.csv", race_date=race_date)
         classified_all = classify_start_finish(reads, bib_chip, gun_time=gun_time, gap_factor=gap_factor)
         n_bib_chip_entries = len(bib_chip)
@@ -617,6 +641,23 @@ def build_race_report(
     chip_only_participants = chip_only_classified[chip_only_classified["bib"].isin(participant_bibs)]
     missed_start_bibs = set(missed_start_reads(chip_only_participants)["bib"])
     missed_finish_bibs = set(missed_finish_reads(chip_only_participants)["bib"])
+
+    # A bib whose chip crossed after the start window closed, ahead of its
+    # finish, started late; the chip didn't miss anything, so it isn't a
+    # missed start.
+    if reads is not None:
+        finish_times = classified.dropna(subset=["finish_time"]).set_index("bib")["finish_time"].to_dict()
+        late = _late_starts_grouped(reads, bib_chip, gun_time, bib_gap_factors, finish_times)
+        late_starts = (
+            late[late["bib"].isin(missed_start_bibs)]
+            .merge(classified[["bib", "finish_time"]], on="bib", how="left")
+            .sort_values("late_start_time")
+            .reset_index(drop=True)
+        )
+    else:
+        late_starts = pd.DataFrame(columns=["bib", "late_start_time", "late_start_n_reads", "finish_time"])
+    missed_start_bibs -= set(late_starts["bib"])
+
     zero_read_bibs = missed_start_bibs & missed_finish_bibs
 
     zero_reads = classified[classified["bib"].isin(zero_read_bibs)]
@@ -650,6 +691,7 @@ def build_race_report(
         zero_reads=zero_reads,
         missed_start_only=missed_start_only,
         missed_finish_only=missed_finish_only,
+        late_starts=late_starts,
         backup=backup,
         lag=lag,
         scanner_clock_offset=offset,

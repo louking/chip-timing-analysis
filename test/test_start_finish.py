@@ -14,6 +14,7 @@ from chip_timing_analysis.analysis.start_finish import (
     DEFAULT_START_OFFSET,
     DEFAULT_PRE_GUN_GRACE,
     classify_start_finish,
+    late_start_reads,
     missed_start_reads,
     missed_finish_reads,
 )
@@ -252,6 +253,73 @@ def test_start_and_finish_are_independent_for_the_same_tag():
     row = result.iloc[0]
     assert row["start_time"] == GUN + pd.Timedelta(seconds=5)
     assert row["finish_time"] == GUN + GAP
+
+
+# ----------------------------------------------------------------------
+# late_start_reads
+# ----------------------------------------------------------------------
+
+def test_late_start_read_between_start_and_finish_windows_is_found():
+    # Headless Horseman 5K bibs 714/716: crossed ~8 min after the gun
+    late = GUN + DEFAULT_START_OFFSET + pd.Timedelta(seconds=30)
+    reads = _reads([
+        {"tag_id": "chip1", "timestamp": late - pd.Timedelta(seconds=1), "read_type": "BS"},
+        {"tag_id": "chip1", "timestamp": late, "read_type": "LS"},
+    ])
+    bib_chip = _bib_chip({101: "chip1"})
+
+    result = late_start_reads(reads, bib_chip, gun_time=GUN, gap_factor=GAP)
+
+    assert result["bib"].tolist() == [101]
+    assert result.iloc[0]["late_start_time"] == late
+    assert result.iloc[0]["late_start_n_reads"] == 2
+
+
+def test_late_start_ignores_reads_in_start_window():
+    reads = _reads([{"tag_id": "chip1", "timestamp": GUN + DEFAULT_START_OFFSET, "read_type": "LS"}])
+    bib_chip = _bib_chip({101: "chip1"})
+
+    assert late_start_reads(reads, bib_chip, gun_time=GUN, gap_factor=GAP).empty
+
+
+def test_late_start_ignores_reads_in_finish_window():
+    reads = _reads([{"tag_id": "chip1", "timestamp": GUN + GAP, "read_type": "LS"}])
+    bib_chip = _bib_chip({101: "chip1"})
+
+    assert late_start_reads(reads, bib_chip, gun_time=GUN, gap_factor=GAP).empty
+
+
+def test_late_start_in_finish_window_counts_when_well_before_the_scored_finish():
+    # Headless Horseman 5K bib 305: crossed ~14 and ~17 min after the gun
+    # (inside the 10-min finish window), finished 41 min later
+    first, second = GUN + GAP + pd.Timedelta(minutes=1), GUN + GAP + pd.Timedelta(minutes=4)
+    finish = second + GAP + pd.Timedelta(minutes=30)
+    reads = _reads([
+        {"tag_id": "chip1", "timestamp": first, "read_type": "LS"},
+        {"tag_id": "chip1", "timestamp": second, "read_type": "LS"},
+        {"tag_id": "chip1", "timestamp": finish, "read_type": "BS"},
+    ])
+    bib_chip = _bib_chip({101: "chip1"})
+
+    result = late_start_reads(reads, bib_chip, gun_time=GUN, gap_factor=GAP, finish_times={101: finish})
+
+    assert result.iloc[0]["late_start_time"] == second  # the last crossing before setting off
+    assert result.iloc[0]["late_start_n_reads"] == 2
+
+
+def test_late_start_ignores_reads_within_gap_factor_of_the_scored_finish():
+    finish = GUN + GAP + pd.Timedelta(minutes=30)
+    reads = _reads([{"tag_id": "chip1", "timestamp": finish - pd.Timedelta(seconds=30), "read_type": "LS"}])
+    bib_chip = _bib_chip({101: "chip1"})
+
+    assert late_start_reads(reads, bib_chip, gun_time=GUN, gap_factor=GAP, finish_times={101: finish}).empty
+
+
+def test_late_start_needs_an_ls_read():
+    reads = _reads([{"tag_id": "chip1", "timestamp": GUN + DEFAULT_START_OFFSET + pd.Timedelta(seconds=30), "read_type": "BS"}])
+    bib_chip = _bib_chip({101: "chip1"})
+
+    assert late_start_reads(reads, bib_chip, gun_time=GUN, gap_factor=GAP).empty
 
 
 # ----------------------------------------------------------------------

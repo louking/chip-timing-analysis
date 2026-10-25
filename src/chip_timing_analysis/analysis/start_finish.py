@@ -104,6 +104,48 @@ def classify_start_finish(
     return result
 
 
+def late_start_reads(
+    reads: pd.DataFrame,
+    bib_chip: pd.DataFrame,
+    gun_time: dt.datetime,
+    gap_factor: pd.Timedelta,
+    start_offset: pd.Timedelta = DEFAULT_START_OFFSET,
+    finish_times: dict | None = None,
+) -> pd.DataFrame:
+    """Bibs whose chip crossed the mats after the start window closed and
+    before their finish crossing -- a late starter, not a missed read. Found
+    on Headless Horseman 5K (2026-10-25): bibs 714/716 crossed together about
+    8 minutes after the gun, and bib 305 about 17 minutes after, so RDS and
+    classify_start_finish() show no start, though the chips read fine.
+
+    The window ends where the finish window opens (gun_time + gap_factor),
+    or, for a bib in finish_times (bib -> the finish time actually scored),
+    one gap_factor before that finish if that's later. A crossing that far
+    ahead of the finish is a separate pass, and on a combined start/finish
+    line that can only be a start. 305 needed this: with a 10-minute Gap
+    Factor both of his early crossings fell in the finish window, and Lou
+    had to ignore them by hand in RDS so the 09:58 crossing scored as his
+    finish.
+
+    Returns columns bib, late_start_time (the last LS read in the window,
+    i.e. the crossing just before the runner set off), late_start_n_reads;
+    only bibs with such an LS read.
+    """
+    reads = reads.merge(bib_chip[["bib", "tag_id"]], on="tag_id", how="inner")
+    window_end = pd.Series(gun_time + gap_factor, index=reads.index)
+    if finish_times:
+        before_finish = reads["bib"].map(finish_times) - gap_factor
+        window_end = window_end.where(~(before_finish > window_end), before_finish)
+    window = reads[(reads["timestamp"] > gun_time + start_offset) & (reads["timestamp"] < window_end)]
+
+    rows = []
+    for bib, g in window.groupby("bib"):
+        ls = g[g["read_type"] == "LS"]
+        if not ls.empty:
+            rows.append({"bib": bib, "late_start_time": ls["timestamp"].max(), "late_start_n_reads": len(g)})
+    return pd.DataFrame(rows, columns=["bib", "late_start_time", "late_start_n_reads"])
+
+
 def missed_start_reads(classified: pd.DataFrame) -> pd.DataFrame:
     """Bibs with no qualifying read in the start window."""
     return classified[classified["start_time"].isna()]

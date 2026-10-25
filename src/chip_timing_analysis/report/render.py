@@ -146,6 +146,12 @@ def _render_read_reliability(report: RaceReport, include_bibs: bool) -> list[str
         )
 
     lines.append(f"- {len(r.genuine_start_miss_bibs())} result(s) had no chip read at the start line.")
+    if r.late_starts is not None and len(r.late_starts):
+        late_bibs = f" ({', '.join(str(b) for b in r.late_starts['bib'])})" if include_bibs else ""
+        lines.append(
+            f"- Separately, {len(r.late_starts)} participant(s) crossed the start after the start window closed "
+            f"(late start). Their chips were read, so they are not counted as a missed start{late_bibs}."
+        )
     return lines
 
 
@@ -333,6 +339,13 @@ def render_detailed_report(report: RaceReport) -> str:
         for _, row in r.missed_start_only.iterrows():
             lines.append(f"| {row['bib']} | {_fmt_ts(row['finish_time'])} |")
 
+    if r.late_starts is not None and len(r.late_starts):
+        lines += ["", f"### Late start ({len(r.late_starts)}) -- chip read after the start window closed, not a missed start"]
+        lines.append("| bib | late_start_time | finish_time |")
+        lines.append("|---|---|---|")
+        for _, row in r.late_starts.iterrows():
+            lines.append(f"| {row['bib']} | {_fmt_ts(row['late_start_time'])} | {_fmt_ts(row['finish_time'])} |")
+
     lines += ["", f"### Missed finish only ({len(r.missed_finish_only)}) -- has a start read, no finish read"]
     if r.missed_finish_only.empty:
         lines.append("None.")
@@ -495,7 +508,8 @@ def render_summary_legend() -> str:
         "- **Zero Reads** — chip assigned, but no read at either start or "
         "finish (a subset of both Missed Start and Missed Finish below).\n"
         "- **Missed Start** — Zero Reads + missed-start-only bibs (our own "
-        "computed count).\n"
+        "computed count). A runner whose chip was read crossing the start "
+        "after the start window closed (a late start) is not counted.\n"
         "- **Missed Finish** — Zero Reads + missed-finish-only bibs (our own "
         "computed count).\n"
         "- **% Missed** — share of all chip read opportunities (start + finish) "

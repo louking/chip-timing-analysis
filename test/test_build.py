@@ -7,6 +7,7 @@ from chip_timing_analysis.report.build import (
     RaceReport,
     _find_one,
     _csv_classify_grouped,
+    _late_starts_grouped,
     _rdgo_distance_label,
     _backfill_from_local_log,
     _build_no_chip_report,
@@ -225,6 +226,30 @@ def test_csv_classify_grouped_splits_bibs_by_distinct_gap_factor():
     row_10k = result[result["bib"] == 201].iloc[0]
     assert row_5k["finish_time"] == GUN + pd.Timedelta(minutes=15)  # past the 14min 5K gap
     assert pd.isna(row_10k["finish_time"])  # before the 30min 10K gap -- not a finish yet
+
+
+def test_late_starts_grouped_applies_per_bib_gap_factor():
+    # both cross at gun+20min: before the 10K's 30min finish window opens
+    # (a late start), but inside the 5K's 14min finish window (not one)
+    reads = _reads([
+        {"tag_id": "chip5k", "timestamp": GUN + pd.Timedelta(minutes=20), "read_type": "LS"},
+        {"tag_id": "chip10k", "timestamp": GUN + pd.Timedelta(minutes=20), "read_type": "LS"},
+    ])
+    bib_chip = pd.DataFrame({"bib": [101, 201], "tag_id": ["chip5k", "chip10k"]})
+    gap_factors = {101: pd.Timedelta(minutes=14), 201: pd.Timedelta(minutes=30)}
+
+    result = _late_starts_grouped(reads, bib_chip, GUN, gap_factors)
+
+    assert result["bib"].tolist() == [201]
+
+
+def test_late_starts_grouped_empty_bib_chip_returns_empty():
+    bib_chip = pd.DataFrame({"bib": pd.Series([], dtype="int64"), "tag_id": pd.Series([], dtype="object")})
+
+    result = _late_starts_grouped(_reads([]), bib_chip, GUN, {})
+
+    assert result.empty
+    assert "late_start_time" in result.columns
 
 
 def test_csv_classify_grouped_drops_bibs_missing_a_gap_factor():
