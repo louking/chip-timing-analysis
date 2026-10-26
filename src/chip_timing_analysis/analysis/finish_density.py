@@ -15,8 +15,11 @@ from chip_timing_analysis.analysis.timing_utils import rolling_count
 # shorter "burst" window: small local races (FSRC's typical 100-150 field)
 # tend to cluster in short bursts (a few finishers together) rather than
 # sustain a competitive-race-style peak, which a 60s window can smooth over.
+# 5s is for dense finishes, where a group crossing together fills a few
+# seconds rather than 15.
 STANDARD_WINDOW = pd.Timedelta(seconds=60)
 BURST_WINDOW = pd.Timedelta(seconds=15)
+SHORT_BURST_WINDOW = pd.Timedelta(seconds=5)
 
 
 def finish_density(classified: pd.DataFrame, bin_width: pd.Timedelta = pd.Timedelta(seconds=30)) -> pd.DataFrame:
@@ -40,7 +43,7 @@ def finish_gaps(classified: pd.DataFrame) -> pd.Series:
     return finishes["finish_time"].diff().dt.total_seconds().dropna()
 
 
-def summary(classified: pd.DataFrame, windows: tuple[pd.Timedelta, ...] = (STANDARD_WINDOW, BURST_WINDOW)) -> None:
+def summary(classified: pd.DataFrame, windows: tuple[pd.Timedelta, ...] = (STANDARD_WINDOW, BURST_WINDOW, SHORT_BURST_WINDOW)) -> None:
     finishes = classified.dropna(subset=["finish_time"])
     print(f"finishers: {len(finishes)}")
     if finishes.empty:

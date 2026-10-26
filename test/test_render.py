@@ -36,6 +36,7 @@ def _report(**overrides) -> RaceReport:
         zero_reads=_bibs_df([]), missed_start_only=_bibs_df([]), missed_finish_only=_bibs_df([]),
         density_rolling=pd.DataFrame({"finishers_in_window": [3]}),
         density_rolling_burst=pd.DataFrame({"finishers_in_window": [2]}),
+        density_rolling_short=pd.DataFrame({"finishers_in_window": [1]}),
         known_drops=[],
     )
     defaults.update(overrides)
@@ -208,6 +209,7 @@ def test_render_detailed_report_empty_backup_table_says_none():
         finish_gap_sec=pd.Series([60.0]),
         density_rolling=finishes.assign(finishers_in_window=[1, 2]),
         density_rolling_burst=finishes.assign(finishers_in_window=[1, 1]),
+        density_rolling_short=finishes.assign(finishers_in_window=[1, 1]),
     )
 
     text = render_detailed_report(report)
@@ -253,6 +255,28 @@ def test_render_summary_row_links_to_race_date_report():
     row = render_summary_row(report)
 
     assert "[2026-05-25](2026-05-25.md)" in row
+
+
+def test_render_summary_row_shows_start_and_finish_peaks():
+    starts = pd.DataFrame({"start_time": [GUN, GUN], "starters_in_window": [1, 4]})
+    report = _report(start_density_rolling=starts)
+
+    row = render_summary_row(report)
+
+    assert "| 0.0% | 4 | 3 | 2 | 1 |" in row
+
+
+def test_render_summary_row_dash_when_no_start_reads():
+    row = render_summary_row(_report(start_density_rolling=None))
+
+    assert "| 0.0% | — | 3 | 2 | 1 |" in row
+
+
+def test_render_summary_row_cell_count_matches_header():
+    header_cells = _SUMMARY_HEADER.splitlines()[-2].count("|")
+
+    assert render_summary_row(_report()).count("|") == header_cells
+    assert render_summary_row(_no_chip_report()).count("|") == header_cells
 
 
 def test_append_summary_row_creates_file_with_header(tmp_path):
@@ -327,6 +351,7 @@ def _no_chip_report(**overrides):
         finish_gap_sec=pd.Series([60.0, 240.0]), checked_in_no_finish=[104, 105],
         density_rolling=pd.DataFrame({"finish_time": finishes["finish_time"], "finishers_in_window": [1, 2, 1]}),
         density_rolling_burst=pd.DataFrame({"finish_time": finishes["finish_time"], "finishers_in_window": [1, 1, 1]}),
+        density_rolling_short=pd.DataFrame({"finish_time": finishes["finish_time"], "finishers_in_window": [1, 1, 1]}),
     )
     defaults.update(overrides)
     return _report(**defaults)
@@ -335,7 +360,34 @@ def _no_chip_report(**overrides):
 def test_render_summary_row_no_chip_race_shows_na_chip_cells():
     row = render_summary_row(_no_chip_report())
 
-    assert "| 3 | n/a | n/a | n/a | n/a | 2 | 1 | Not chip timed |" in row
+    assert "| 3 | n/a | n/a | n/a | n/a | n/a | 2 | 1 | 1 | Not chip timed |" in row
+
+
+def test_detailed_report_start_density_section():
+    finishes = _bibs_df([101, 102], {"finish_time": [GUN + pd.Timedelta(minutes=m) for m in (20, 21)]})
+    starts = pd.DataFrame({
+        "start_time": [GUN + pd.Timedelta(seconds=s) for s in (1, 1.5)], "starters_in_window": [1, 2],
+    })
+    report = _report(
+        classified=finishes, tm_data=finishes, finish_gap_sec=pd.Series([60.0]),
+        density_rolling=finishes.assign(finishers_in_window=[1, 2]),
+        density_rolling_burst=finishes.assign(finishers_in_window=[1, 1]),
+        density_rolling_short=finishes.assign(finishers_in_window=[1, 1]),
+        start_density_rolling=starts, start_spread_90_sec=1.45,
+    )
+
+    detailed = render_detailed_report(report)
+    sanitized = render_sanitized_report(report)
+
+    assert "- 2 start crossings read; 90% had crossed within 1.4s of the gun." in detailed
+    assert "- Peak: 2 start crossings in a 1s window, ending near 2026-05-25 09:00:01.50." in detailed
+    assert "- Peak: 2 start crossings in a 1s window." in sanitized
+    assert "5s window" in detailed
+
+
+def test_no_chip_reports_omit_start_density():
+    assert "Start-Line Density" not in render_detailed_report(_no_chip_report())
+    assert "Start-Line Density" not in render_sanitized_report(_no_chip_report())
 
 
 def test_detailed_report_no_chip_race_omits_chip_sections_and_names_bibs():

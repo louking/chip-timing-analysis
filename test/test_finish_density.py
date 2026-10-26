@@ -5,6 +5,7 @@ import pandas as pd
 from chip_timing_analysis.analysis.finish_density import (
     STANDARD_WINDOW,
     BURST_WINDOW,
+    SHORT_BURST_WINDOW,
     finish_density,
     rolling_finish_rate,
     finish_gaps,
@@ -23,6 +24,7 @@ def _classified(*offsets_sec) -> pd.DataFrame:
 def test_standard_and_burst_window_constants():
     assert STANDARD_WINDOW == pd.Timedelta(seconds=60)
     assert BURST_WINDOW == pd.Timedelta(seconds=15)
+    assert SHORT_BURST_WINDOW == pd.Timedelta(seconds=5)
 
 
 # ----------------------------------------------------------------------

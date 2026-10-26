@@ -25,7 +25,10 @@ from chip_timing_analysis.analysis.start_finish import (
     GAP_FACTOR_BY_DISTANCE,
 )
 from chip_timing_analysis.analysis.queue_lag import compute_lag, add_excess_lag, add_finish_rate, scanner_clock_offset
-from chip_timing_analysis.analysis.finish_density import finish_density, rolling_finish_rate, finish_gaps, STANDARD_WINDOW, BURST_WINDOW
+from chip_timing_analysis.analysis.finish_density import (
+    finish_density, rolling_finish_rate, finish_gaps, STANDARD_WINDOW, BURST_WINDOW, SHORT_BURST_WINDOW,
+)
+from chip_timing_analysis.analysis.start_density import rolling_start_rate, start_spread
 from chip_timing_analysis.analysis.mat_reliability import (
     mat_summary as compute_mat_summary,
     flag_weak_mats,
@@ -89,6 +92,11 @@ class RaceReport:
     density_bins: pd.DataFrame | None = None  # finish_density() output
     density_rolling: pd.DataFrame | None = None  # rolling_finish_rate(), STANDARD_WINDOW (60s) -- matches RRTC's rpm convention
     density_rolling_burst: pd.DataFrame | None = None  # rolling_finish_rate(), BURST_WINDOW (15s) -- catches short clusters a 60s window smooths over
+    density_rolling_short: pd.DataFrame | None = None  # rolling_finish_rate(), SHORT_BURST_WINDOW (5s) -- groups finishing together
+    # Chip-timed races only (None otherwise): start crossings per START_WINDOW
+    # (1s), and seconds after the gun by which 90% of start crossings happened.
+    start_density_rolling: pd.DataFrame | None = None  # rolling_start_rate() output
+    start_spread_90_sec: float | None = None  # start_spread() output
     finish_gap_sec: pd.Series | None = None  # finish_gaps() output
 
     # Raw (r_*.log, RR-type) per-mat diagnostics: is any antenna reading
@@ -433,6 +441,7 @@ def _build_no_chip_report(
         density_bins=finish_density(classified),
         density_rolling=rolling_finish_rate(classified, window=STANDARD_WINDOW),
         density_rolling_burst=rolling_finish_rate(classified, window=BURST_WINDOW),
+        density_rolling_short=rolling_finish_rate(classified, window=SHORT_BURST_WINDOW),
         finish_gap_sec=finish_gaps(classified),
         notes=notes or [],
         detail_notes=detail_notes or [],
@@ -698,7 +707,10 @@ def build_race_report(
         density_bins=finish_density(classified),
         density_rolling=rolling_finish_rate(classified, window=STANDARD_WINDOW),
         density_rolling_burst=rolling_finish_rate(classified, window=BURST_WINDOW),
+        density_rolling_short=rolling_finish_rate(classified, window=SHORT_BURST_WINDOW),
         finish_gap_sec=finish_gaps(classified),
+        start_density_rolling=rolling_start_rate(classified),
+        start_spread_90_sec=start_spread(classified, gun_time),
         mat_summary=mat_summ,
         mat_reliability_verdict=mat_verdict,
         notes=notes or [],

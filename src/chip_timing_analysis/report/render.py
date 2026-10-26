@@ -158,9 +158,10 @@ def _render_read_reliability(report: RaceReport, include_bibs: bool) -> list[str
 def _render_finish_density(report: RaceReport, verbose: bool) -> list[str]:
     """Shared Finish-Line Density content -- like _render_read_reliability,
     kept in one place so detailed/sanitized can't drift apart. Reports both
-    the standard 60s window (matches RRTC's runners-per-minute convention)
-    and the shorter 15s burst window (catches short clusters -- more typical
-    of FSRC's small-field races -- that a 60s window can smooth over)."""
+    the standard 60s window (matches RRTC's runners-per-minute convention),
+    the shorter 15s burst window (catches short clusters -- more typical
+    of FSRC's small-field races -- that a 60s window can smooth over), and a
+    5s window for groups finishing together."""
     r = report
     span_sec = (r.classified["finish_time"].max() - r.classified["finish_time"].min()).total_seconds()
     n_finishes = r.classified["finish_time"].notna().sum()
@@ -172,10 +173,29 @@ def _render_finish_density(report: RaceReport, verbose: bool) -> list[str]:
         )
     peak_std = r.density_rolling.loc[r.density_rolling["finishers_in_window"].idxmax()]
     peak_burst = r.density_rolling_burst.loc[r.density_rolling_burst["finishers_in_window"].idxmax()]
+    peak_short = r.density_rolling_short.loc[r.density_rolling_short["finishers_in_window"].idxmax()]
     ending = (lambda p: f", ending near {_fmt_ts(p['finish_time'])}") if verbose else (lambda p: "")
     lines.append(f"- Peak density: {peak_std['finishers_in_window']} finishers in a 60s window{ending(peak_std)}.")
     lines.append(f"- Peak burst: {peak_burst['finishers_in_window']} finishers in a 15s window{ending(peak_burst)}.")
+    lines.append(f"- Peak short burst: {peak_short['finishers_in_window']} finishers in a 5s window{ending(peak_short)}.")
     return lines
+
+
+def _render_start_density(report: RaceReport, verbose: bool) -> list[str]:
+    """Shared Start-Line Density section (chip-timed races only), same
+    pattern as _render_finish_density. Empty if there were no start reads."""
+    r = report
+    rolled = r.start_density_rolling
+    if rolled is None or rolled.empty:
+        return []
+    peak = rolled.loc[rolled["starters_in_window"].idxmax()]
+    ending = f", ending near {_fmt_ts(peak['start_time'])}" if verbose else ""
+    return [
+        "",
+        "## Start-Line Density",
+        f"- {len(rolled)} start crossings read; 90% had crossed within {r.start_spread_90_sec:.1f}s of the gun.",
+        f"- Peak: {peak['starters_in_window']} start crossings in a 1s window{ending}.",
+    ]
 
 
 def _render_mat_diagnostics(report: RaceReport) -> list[str]:
@@ -396,6 +416,7 @@ def render_detailed_report(report: RaceReport) -> str:
 
     lines += _render_queue_lag(r)
 
+    lines += _render_start_density(r, verbose=True)
     lines += ["", "## Finish-Line Density"]
     lines += _render_finish_density(r, verbose=True)
 
@@ -427,6 +448,7 @@ def render_sanitized_report(report: RaceReport) -> str:
     if r.chip_timed:
         lines += ["", "## Read Reliability"]
         lines += _render_read_reliability(r, include_bibs=False)
+        lines += _render_start_density(r, verbose=False)
 
     lines += ["", "## Finish-Line Density"]
     lines += _render_finish_density(r, verbose=False)
@@ -469,19 +491,23 @@ def render_summary_row(report: RaceReport) -> str:
     r = report
     peak_density = r.density_rolling["finishers_in_window"].max()
     peak_burst = r.density_rolling_burst["finishers_in_window"].max()
+    peak_short = r.density_rolling_short["finishers_in_window"].max()
 
     if r.chip_timed:
         n_start_miss = len(r.genuine_start_miss_bibs())  # includes zero_reads; excludes confirmed drops
         n_finish_miss = len(r.genuine_finish_miss_bibs())  # includes zero_reads; excludes confirmed drops
         chip_cells = f"{len(r.zero_reads)} | {n_start_miss} | {n_finish_miss} | {r.pct_read_opportunities_missed():.1f}%"
+        start_rolled = r.start_density_rolling
+        start_peak = start_rolled["starters_in_window"].max() if start_rolled is not None and not start_rolled.empty else "—"
     else:
         # summary_merge.py keys on these "n/a" cells to leave the row out of
         # the pooled Overall chip-read totals.
         chip_cells = "n/a | n/a | n/a | n/a"
+        start_peak = "n/a"
 
     return (
         f"| [{r.race_date}]({r.race_date}.md) | {r.distance} | {r.n_participants} | "
-        f"{chip_cells} | {peak_density} | {peak_burst} | {_summary_notes_cell(r)} |"
+        f"{chip_cells} | {start_peak} | {peak_density} | {peak_burst} | {peak_short} | {_summary_notes_cell(r)} |"
     )
 
 
@@ -492,8 +518,8 @@ _SUMMARY_HEADER = (
     f"One row per race analyzed, most recent first. See the [column legend]({_SUMMARY_LEGEND_FILENAME}) "
     "for what each column means.\n\n"
     "| Date | Distance | Participants | Zero Reads | Missed Start | Missed Finish | "
-    "% Missed | Peak (60s) | Peak (15s) | Notes |\n"
-    "|---|---|---|---|---|---|---|---|---|---|\n"
+    "% Missed | Start Peak (1s) | Peak (60s) | Peak (15s) | Peak (5s) | Notes |\n"
+    "|---|---|---|---|---|---|---|---|---|---|---|---|\n"
 )
 
 
@@ -514,15 +540,19 @@ def render_summary_legend() -> str:
         "computed count).\n"
         "- **% Missed** — share of all chip read opportunities (start + finish) "
         "that went unread.\n"
-        "- **Peak (60s)** — matches the finish-line-timing field's standard "
+        "- **Start Peak (1s)** — most start crossings read within any one "
+        "second, the load on the start mats at the busiest moment.\n"
+        "- **Peak (60s)** — most finishers within any 60s window; matches the "
+        "finish-line-timing field's standard "
         "runners-per-minute convention.\n"
         "- **Peak (15s)** — a shorter burst window that catches short clusters "
         "a 60s window can smooth over — more typical of FSRC's small-field races.\n"
+        "- **Peak (5s)** — groups finishing together, for dense finishes.\n"
         "- **Notes** — kept short here (full detail is on the linked per-race "
         "report); a no-chip-assigned count only appears here when a race "
         "actually had one (rare process problem, not a permanent column).\n"
         "- **n/a** — the race was not chip timed (Time Machine only), so the "
-        "chip read columns don't apply; Participants is the finisher count.\n\n"
+        "chip read and start columns don't apply; Participants is the finisher count.\n\n"
         "See the per-race sanitized report for the recovered-vs-unrecovered "
         "backup-timing breakdown.\n"
     )
