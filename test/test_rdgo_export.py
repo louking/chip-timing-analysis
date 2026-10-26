@@ -405,6 +405,24 @@ def test_classify_occurrences_follow_scored_event_settings():
     assert row["finish_time"] == GUN + pd.Timedelta(minutes=20)
 
 
+def test_classify_occurrence_1_is_start_without_starting_point_id_when_finish_is_2():
+    # RaceDay Mobile practice (2026-09-05): starting_point_id None, but RDS
+    # still recorded occurrence 1 at the combined start/finish location
+    export = make_export(
+        scored_events=[_no_start_event(min_finish_time=20 * 60 * 1000, default_segment_finish_occurrence=2)],
+        entity_map=[make_participant(101, scoring_entity_id=1, event_id="100")],
+        read_data={"1": [
+            make_read(1, device_id=2, timestamp=GUN + pd.Timedelta(seconds=5)),
+            make_read(2, device_id=2, timestamp=GUN + pd.Timedelta(minutes=40)),
+        ]},
+    )
+
+    row = classify_start_finish(export).iloc[0]
+
+    assert row["start_time"] == GUN + pd.Timedelta(seconds=5)
+    assert row["finish_time"] == GUN + pd.Timedelta(minutes=40)
+
+
 def test_classify_occurrence_1_is_finish_when_event_has_no_start_location():
     export = make_export(
         scored_events=[_no_start_event()],

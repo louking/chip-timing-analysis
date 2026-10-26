@@ -111,21 +111,22 @@ def has_chip_timing(export: RdgoExport) -> bool:
 
 def _occurrences(scored_event: dict | None) -> tuple[int | None, int]:
     """(start_occurrence, finish_occurrence) for a scored event's reads in
-    read_data -- read from the export, not assumed. Every chip race checked
-    (Indy, Pie Run, Lewis, Wild Trail, Panda, RaceDay Mobile practice) has one
-    combined START/FINISH timing location, a `starting_point_id`, and
+    read_data -- read from the export, not assumed. A start occurrence exists
+    whenever the finish occurrence is later than 1: every chip race checked
+    (Indy, Pie Run, Lewis, Wild Trail, Panda, Mustang, Headless Horseman) has
+    one combined START/FINISH timing location and
     `default_segment_finish_occurrence` 2, so occurrence 1 is the start and 2
-    the finish. A race with no start location (Pink and Blue 5K: finish-only
-    "INTERMEDIATE/FINISH" location, `starting_point_id` None,
+    the finish. Don't key on `starting_point_id`: the RaceDay Mobile practice
+    (2026-09-05) has it None, yet RDS recorded occurrence 1 at the combined
+    location for every runner. A race with no start location (Pink and Blue
+    5K: finish-only "INTERMEDIATE/FINISH" location,
     `default_segment_finish_occurrence` 1) has occurrence 1 as its finish and
     no start occurrence at all. Falls back to the chip-race layout when the
     scored event is unknown or lacks these fields."""
     if scored_event is None:
         return 1, 2
     finish_occ = scored_event.get("default_segment_finish_occurrence") or 2
-    if scored_event.get("starting_point_id", 0) is None:
-        return None, finish_occ
-    return (1 if finish_occ != 1 else None), finish_occ
+    return (1 if finish_occ > 1 else None), finish_occ
 
 
 def device_label(export: RdgoExport, device_id: int | None) -> str | None:
