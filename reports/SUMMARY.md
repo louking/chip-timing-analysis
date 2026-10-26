@@ -2,7 +2,7 @@
 
 One row per race analyzed, most recent first. See the [column legend](SUMMARY-LEGEND.md) for what each column means.
 
-| Date | Distance | Participants | Zero Reads | Missed Start | Missed Finish | % Missed | Start Peak (1s) | Peak (60s) | Peak (15s) | Peak (5s) | Notes |
+| Date | Distance | Participants | Zero Reads | Missed Start | Missed Finish | % Missed | Start Peak (1s) | Finish Peak (60s) | Finish Peak (15s) | Finish Peak (5s) | Notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | [2026-10-25](2026-10-25.md) | 5K | 247 | 0 | 3 | 0 | 0.6% | 16 | 20 | 11 | 8 | Every finisher was chip-timed at the finish, so no backup ti… |
 | [2026-10-24](2026-10-24.md) | 5K | 127 | 0 | 2 | 0 | 0.8% | 18 | 11 | 7 | 5 | — |
