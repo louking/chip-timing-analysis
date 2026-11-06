@@ -108,3 +108,29 @@ def test_sanity_check_handles_empty_dataframe(capsys):
 
     out = capsys.readouterr().out
     assert "records: 0" in out
+
+
+# ----------------------------------------------------------------------
+# parse_scanner_sends
+# ----------------------------------------------------------------------
+
+def _send_line(ts: str, raceid: str, bibno: str) -> str:
+    return (f"{ts} barcode-scanner DEBUG: sending to backend: "
+            f"{{'opcode': 'scannedbib', 'raceid': '{raceid}', 'bibno': '{bibno}'}}")
+
+
+def test_parse_scanner_sends_drops_leading_zeros_and_blank_scans(tmp_path):
+    from chip_timing_analysis.parsers.barcode_scanner import parse_scanner_sends
+
+    lines = [
+        _send_line("2026-10-25 09:19:32,992", "6", "0264"),
+        _send_line("2026-10-25 09:19:40,000", "6", "0000"),
+        _send_line("2026-10-25 09:19:42,082", "5", "236"),
+    ]
+    path = tmp_path / "barcode-scanner.log"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    df = parse_scanner_sends(path, raceid="6")
+
+    assert df["bib"].tolist() == [264]
+    assert df.iloc[0]["send_time"] == pd.Timestamp("2026-10-25 09:19:32.992")

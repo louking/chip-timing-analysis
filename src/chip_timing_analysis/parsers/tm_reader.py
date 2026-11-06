@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from chip_timing_analysis.parsers.tmtility_log import backend_messages
+
 _ENTRY_RE = re.compile(
     r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) "
     r"tm-reader DEBUG: time machine msg processed: b'.*?"
@@ -98,6 +100,33 @@ def parse_tm_resets(
     if end is not None:
         resets = resets[resets <= pd.Timestamp(end)]
     return resets.reset_index(drop=True)
+
+
+def parse_tm_sends(
+    file_path: str | Path,
+    start: str | dt.datetime | None = None,
+    end: str | dt.datetime | None = None,
+    raceid: str | int | None = None,
+) -> pd.DataFrame:
+    """Time Machine results as tmtility's TM client sent them to the backend
+    (columns: send_time, opcode, pos, bib). opcode is `select` when the TM
+    operator keyed a bib on the TM keypad and `primary` when not; bib is that
+    keypad bib, 0 for none (leading zeros dropped, as tmtility does).
+    send_time is on the tmtility laptop's clock and trails the TM press by
+    the client's queueing delay. start/end bound send_time; raceid keeps
+    only that tmtility race's messages."""
+    rows = [
+        {
+            "send_time": t,
+            "opcode": msg.get("opcode"),
+            "pos": int(msg["pos"]),
+            "bib": int(msg.get("bibno") or 0),
+        }
+        for t, msg in backend_messages(file_path, start=start, end=end, raceid=raceid)
+        if "pos" in msg
+    ]
+    df = pd.DataFrame(rows, columns=["send_time", "opcode", "pos", "bib"])
+    return df.astype({"pos": "int64", "bib": "int64"})
 
 
 def sanity_check(df: pd.DataFrame) -> None:

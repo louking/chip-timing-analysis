@@ -122,3 +122,35 @@ def test_sanity_check_prints_entry_count(tmp_path, capsys):
     sanity_check(parse_tm_entries(path))
 
     assert "entries: 1" in capsys.readouterr().out
+
+
+# ----------------------------------------------------------------------
+# parse_tm_sends
+# ----------------------------------------------------------------------
+
+def test_parse_tm_sends_keypad_and_blank_bib(tmp_path):
+    from chip_timing_analysis.parsers.tm_reader import parse_tm_sends
+
+    lines = [
+        "2026-10-25 09:17:40,359 tm-reader DEBUG: sending to backend: {'opcode': 'select', 'raceid': '6', 'pos': 1, 'time': '00:17:39.01', 'bibno': 365}",
+        "2026-10-25 09:18:00,000 tm-reader DEBUG: sending to backend: {'opcode': 'primary', 'raceid': '6', 'pos': 2, 'time': '00:17:59.00'}",
+        "2026-10-25 09:18:10,000 tm-reader DEBUG: sending to backend: {'opcode': 'select', 'raceid': '6', 'pos': 3, 'time': '00:18:09.00', 'bibno': 0}",
+    ]
+    path = tmp_path / "tm-reader.log"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    df = parse_tm_sends(path)
+
+    assert df["pos"].tolist() == [1, 2, 3]
+    assert df["bib"].tolist() == [365, 0, 0]
+    assert df["opcode"].tolist() == ["select", "primary", "select"]
+    assert df.iloc[0]["send_time"] == pd.Timestamp("2026-10-25 09:17:40.359")
+
+
+def test_parse_tm_sends_empty_has_columns(tmp_path):
+    from chip_timing_analysis.parsers.tm_reader import parse_tm_sends
+
+    path = tmp_path / "tm-reader.log"
+    path.write_text("", encoding="utf-8")
+
+    assert list(parse_tm_sends(path).columns) == ["send_time", "opcode", "pos", "bib"]

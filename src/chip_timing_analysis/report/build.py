@@ -13,8 +13,8 @@ import pandas as pd
 from chip_timing_analysis.parsers.trident_raw import parse_trident_raw
 from chip_timing_analysis.parsers.bib_chip import parse_bib_chip
 from chip_timing_analysis.parsers.tm_data import parse_tm_data
-from chip_timing_analysis.parsers.barcode_scanner import parse_barcode_scans
-from chip_timing_analysis.parsers.tm_reader import parse_tm_entries, parse_tm_resets
+from chip_timing_analysis.parsers.barcode_scanner import parse_barcode_scans, parse_scanner_sends
+from chip_timing_analysis.parsers.tm_reader import parse_tm_entries, parse_tm_resets, parse_tm_sends
 from chip_timing_analysis.parsers.backup_time_selected import parse_backup_time_selected
 from chip_timing_analysis.parsers import rdgo_export
 from chip_timing_analysis.analysis.start_finish import (
@@ -25,6 +25,7 @@ from chip_timing_analysis.analysis.start_finish import (
     GAP_FACTOR_BY_DISTANCE,
 )
 from chip_timing_analysis.analysis.queue_lag import compute_lag, add_excess_lag, add_finish_rate, scanner_clock_offset
+from chip_timing_analysis.analysis.scan_lag import DEFAULT_MAX_LAG, tm_scan_lag
 from chip_timing_analysis.analysis.finish_density import (
     finish_density, rolling_finish_rate, finish_gaps, STANDARD_WINDOW, BURST_WINDOW, SHORT_BURST_WINDOW,
 )
@@ -89,6 +90,11 @@ class RaceReport:
     # tm-reader.log (see analysis.queue_lag.scanner_clock_offset()). None if
     # there was no tm-reader.log (or no TM entries on race day) to derive it.
     scanner_clock_offset: pd.Timedelta | None = None
+    # Time Machine press to the same bib's scan, for TM results with a keypad
+    # bib (analysis.scan_lag.tm_scan_lag() output). Both times are from the
+    # tmtility laptop's logs, so no clock offset applies. None if either
+    # tm-reader.log or barcode-scanner.log is missing.
+    scan_lag: pd.DataFrame | None = None
     density_bins: pd.DataFrame | None = None  # finish_density() output
     density_rolling: pd.DataFrame | None = None  # rolling_finish_rate(), STANDARD_WINDOW (60s) -- matches RRTC's rpm convention
     density_rolling_burst: pd.DataFrame | None = None  # rolling_finish_rate(), BURST_WINDOW (15s) -- catches short clusters a 60s window smooths over
@@ -384,6 +390,24 @@ def _queue_lag(
     return add_finish_rate(lag), offset
 
 
+def _scan_lag(race_dir: Path, classified: pd.DataFrame, gun_time: pd.Timestamp) -> pd.DataFrame | None:
+    """TM-press-to-scan lag from the shared logs/ folder (see _queue_lag()),
+    or None if either log is missing. Bounded to the race's window rather
+    than a tmtility race id, which nothing in race_dir records: from 5 min
+    before the gun (the tmtility clock can be ~30s off RDS's) to 10 min
+    after the last finish. That drops pre-race test entries."""
+    logs_dir = race_dir.parent / "logs"
+    tm_reader_log = _find_one(str(logs_dir / "tm-reader.log"))
+    scanner_log = _find_one(str(logs_dir / "barcode-scanner.log"))
+    if not (tm_reader_log and scanner_log) or pd.isna(gun_time) or classified["finish_time"].isna().all():
+        return None
+    start = gun_time - pd.Timedelta(minutes=5)
+    end = classified["finish_time"].max() + pd.Timedelta(minutes=10)
+    tm_sends = parse_tm_sends(tm_reader_log, start=start, end=end)
+    scans = parse_scanner_sends(scanner_log, start=start - DEFAULT_MAX_LAG, end=end + DEFAULT_MAX_LAG)
+    return tm_scan_lag(tm_sends, scans)
+
+
 def _build_no_chip_report(
     race_dir: Path,
     rdgo: rdgo_export.RdgoExport,
@@ -438,6 +462,7 @@ def _build_no_chip_report(
         backup=None,
         lag=lag,
         scanner_clock_offset=offset,
+        scan_lag=_scan_lag(race_dir, classified, gun_time),
         density_bins=finish_density(classified),
         density_rolling=rolling_finish_rate(classified, window=STANDARD_WINDOW),
         density_rolling_burst=rolling_finish_rate(classified, window=BURST_WINDOW),
@@ -704,6 +729,7 @@ def build_race_report(
         backup=backup,
         lag=lag,
         scanner_clock_offset=offset,
+        scan_lag=_scan_lag(race_dir, classified, gun_time),
         density_bins=finish_density(classified),
         density_rolling=rolling_finish_rate(classified, window=STANDARD_WINDOW),
         density_rolling_burst=rolling_finish_rate(classified, window=BURST_WINDOW),

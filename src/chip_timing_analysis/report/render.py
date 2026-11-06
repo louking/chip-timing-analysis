@@ -12,6 +12,7 @@ from pathlib import Path
 import pandas as pd
 
 from chip_timing_analysis.analysis.queue_lag import lag_histogram
+from chip_timing_analysis.analysis.scan_lag import scan_lag_summary
 from chip_timing_analysis.report.build import RaceReport
 
 def _fmt_ts(ts) -> str:
@@ -308,6 +309,46 @@ def _render_queue_lag(report: RaceReport) -> list[str]:
     return lines
 
 
+SLOW_SCAN_LAG_SEC = 10
+
+
+def _render_scan_lag(report: RaceReport) -> list[str]:
+    """Detailed report only. TM press to the same bib's scan, both from the
+    tmtility laptop's logs (analysis.scan_lag)."""
+    r = report
+    lines = ["", "## Time Machine-to-Scan Lag"]
+    if r.scan_lag is None:
+        lines.append("No tm-reader.log and barcode-scanner.log pair available for this race.")
+        return lines
+    s = scan_lag_summary(r.scan_lag)
+    if s["n_results"] == 0:
+        lines.append("- No Time Machine results with a keypad bib in tm-reader.log for this race.")
+        return lines
+    lines.append(
+        f"- Time Machine results with a keypad bib: {s['n_results']}, matched to that bib's own scan "
+        f"within 60s: {s['n_matched']}"
+    )
+    if s["median"] is None:
+        lines.append("- Too few matches to report lag.")
+        return lines
+    lines.append(
+        f"- Lag (sec): median {s['median']:.1f}, 5th-95th pct {s['p5']:.1f}-{s['p95']:.1f}, "
+        f"range {s['min']:.1f}-{s['max']:.1f}"
+    )
+    slow = r.scan_lag[r.scan_lag["matched"] & (r.scan_lag["lag_sec"] > SLOW_SCAN_LAG_SEC)]
+    if not slow.empty:
+        lines.append(
+            f"- Over {SLOW_SCAN_LAG_SEC}s: "
+            + ", ".join(f"bib {row['bib']} ({row['lag_sec']:.1f}s)" for _, row in slow.iterrows())
+        )
+    lines.append(
+        "- Both times are from the tmtility laptop's logs, so no clock offset applies, and each includes up to "
+        "~0.3s of client queueing. A result with no match had a keypad bib that was never scanned, "
+        "or was keyed wrong."
+    )
+    return lines
+
+
 def render_detailed_report(report: RaceReport) -> str:
     r = report
     lines = [
@@ -321,6 +362,7 @@ def render_detailed_report(report: RaceReport) -> str:
         lines += _render_no_chip_overview(r, include_bibs=True)
         lines += _render_notes(r.notes + r.detail_notes)
         lines += _render_queue_lag(r)
+        lines += _render_scan_lag(r)
         lines += ["", "## Finish-Line Density"]
         lines += _render_finish_density(r, verbose=True)
         return "\n".join(lines) + "\n"
@@ -415,6 +457,7 @@ def render_detailed_report(report: RaceReport) -> str:
     lines += _render_mat_diagnostics(r)
 
     lines += _render_queue_lag(r)
+    lines += _render_scan_lag(r)
 
     lines += _render_start_density(r, verbose=True)
     lines += ["", "## Finish-Line Density"]

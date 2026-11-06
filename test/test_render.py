@@ -442,3 +442,42 @@ def test_queue_lag_reports_scanner_clock_offset():
     text = "\n".join(_render_queue_lag(_report(lag=_lag([3, 5]), scanner_clock_offset=pd.Timedelta(seconds=26.15))))
 
     assert "Scan times shifted by +26.15s" in text
+
+
+# ----------------------------------------------------------------------
+# _render_scan_lag
+# ----------------------------------------------------------------------
+
+def _scan_lag(lags):
+    return pd.DataFrame({
+        "pos": range(1, len(lags) + 1),
+        "bib": range(201, 201 + len(lags)),
+        "tm_time": [GUN] * len(lags),
+        "scan_time": [GUN] * len(lags),
+        "lag_sec": [l if l is not None else float("nan") for l in lags],
+        "matched": [l is not None and abs(l) <= 60 for l in lags],
+    })
+
+
+def test_scan_lag_missing_logs_says_so():
+    from chip_timing_analysis.report.render import _render_scan_lag
+
+    assert "No tm-reader.log and barcode-scanner.log pair" in "\n".join(_render_scan_lag(_report(scan_lag=None)))
+
+
+def test_scan_lag_reports_stats_and_slow_bibs():
+    from chip_timing_analysis.report.render import _render_scan_lag
+
+    text = "\n".join(_render_scan_lag(_report(scan_lag=_scan_lag([3, 4, 23.6, None]))))
+
+    assert "keypad bib: 4, matched to that bib's own scan within 60s: 3" in text
+    assert "median 4.0" in text
+    assert "Over 10s: bib 203 (23.6s)" in text
+
+
+def test_scan_lag_no_keypad_results():
+    from chip_timing_analysis.report.render import _render_scan_lag
+
+    text = "\n".join(_render_scan_lag(_report(scan_lag=_scan_lag([]))))
+
+    assert "No Time Machine results with a keypad bib" in text

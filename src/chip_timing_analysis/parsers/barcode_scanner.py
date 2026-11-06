@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from chip_timing_analysis.parsers.tmtility_log import backend_messages
+
 _SCAN_RE = re.compile(
     r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) "
     r"barcode-scanner DEBUG: barcode scanner data received: (?P<bib>\d+)$"
@@ -51,6 +53,28 @@ def parse_barcode_scans(
     if end is not None:
         df = df[df["scan_time"] <= pd.Timestamp(end)]
     return df.reset_index(drop=True)
+
+
+def parse_scanner_sends(
+    file_path: str | Path,
+    start: str | dt.datetime | None = None,
+    end: str | dt.datetime | None = None,
+    raceid: str | int | None = None,
+) -> pd.DataFrame:
+    """Scans as the barcode-scanner client sent them to the backend (columns:
+    bib, send_time). Leading zeros are dropped as tmtility does, and a blank
+    `0000` scan is skipped. Unlike parse_barcode_scans() this carries the
+    tmtility race id, so raceid can keep only that race's scans; send_time
+    trails the scan by the client's queueing delay. start/end bound
+    send_time."""
+    rows = []
+    for t, msg in backend_messages(file_path, start=start, end=end, raceid=raceid):
+        bibno = str(msg.get("bibno", ""))
+        if msg.get("opcode") != "scannedbib" or not bibno.isdigit() or int(bibno) == 0:
+            continue
+        rows.append({"bib": int(bibno), "send_time": t})
+    df = pd.DataFrame(rows, columns=["bib", "send_time"])
+    return df.astype({"bib": "int64"})
 
 
 def sanity_check(df: pd.DataFrame) -> None:
